@@ -8,5 +8,5 @@ mkdir build
 cd build
 export PATH="/home/bustaman/.local/bin:$PATH"
 conan install .. --output-folder=. --build=missing
-cmake -DCMAKE_BUILD_TYPE=Debug ..
+cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=Debug ..
 cmake --build .

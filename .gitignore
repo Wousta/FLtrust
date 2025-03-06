@@ -66,3 +66,4 @@ pkg/
 
 # Build directory
 build/
+datasets/
