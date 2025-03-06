@@ -1,0 +1,68 @@
+# Compiled source files
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# Packages
+*.jar
+*.war
+*.ear
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE specific files
+.vscode/
+.idea/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Rust
+target/
+Cargo.lock
+
+# Go
+bin/
+pkg/
+
+# C/C++
+*.out
+*.dSYM/
+*.obj
+*.elf
+*.map
+*.dep
+
+# Backup files
+*.bak
+*.swp
+*.swo
+*.tmp
+
+# RDMA specific
+*.rdma
+
+# Build directory
+build/
