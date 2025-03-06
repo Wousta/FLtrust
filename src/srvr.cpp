@@ -36,6 +36,8 @@ int main(int argc, char *argv[]) {
   std::cout << "Accepting clients requests\n";
   int ret = conn.acceptConn(addr_info, reg_info);
 
+  
+
   // sleep for server to be available
   std::this_thread::sleep_for(std::chrono::hours(1));
   return 0;
