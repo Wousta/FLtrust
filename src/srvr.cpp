@@ -1,14 +1,22 @@
 #include "../../RcConn/include/rc_conn.hpp"
 #include "../../rdma-api/include/rdma-api.hpp"
 #include "../../shared/util.hpp"
+#include "include/mnistTrain.hpp"
 #include <chrono>
 #include <cstring>
 #include <iostream>
 #include <lyra/lyra.hpp>
 #include <string>
 #include <thread>
+#include <torch/torch.h>
 
 int main(int argc, char *argv[]) {
+
+  
+  std::cout << "Trying fltrust\n";
+  int retMNIST = runMNISTTrain();
+  std::cout << "FLTrust returned: " << retMNIST << "\n";
+
   std::string srvr_ip;
   std::string port;
   AddrInfo addr_info;
@@ -31,12 +39,17 @@ int main(int argc, char *argv[]) {
   // addr
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
   addr_info.port = strdup(port.c_str());
-  // accept client conn requests
-  RcConn conn;
-  std::cout << "Accepting clients requests\n";
-  int ret = conn.acceptConn(addr_info, reg_info);
-
   
+  while (true) {
+    // accept client conn requests
+    RcConn conn;
+    std::cout << "Accepting clients requests\n";
+
+    int ret = conn.acceptConn(addr_info, reg_info);
+    if (ret == 0) {
+      std::cout << "ret 0\n";
+    }
+  }
 
   // sleep for server to be available
   std::this_thread::sleep_for(std::chrono::hours(1));
