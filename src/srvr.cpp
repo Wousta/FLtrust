@@ -2,7 +2,9 @@
 #include "../../rdma-api/include/rdma-api.hpp"
 #include "../../shared/util.hpp"
 #include "include/mnistTrain.hpp"
-#include "include/training.hpp"
+#include "include/globalConstants.hpp"
+#include <logger.hpp>
+
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -15,6 +17,7 @@
 using ltncyVec = std::vector<std::pair<int, std::chrono::nanoseconds::rep>>;
 
 int main(int argc, char *argv[]) {
+  Logger::instance().log("Server starting execution...");
 
   std::string srvr_ip;
   std::string port;
@@ -56,53 +59,62 @@ int main(int argc, char *argv[]) {
     std::memcpy(castV(reg_info.addr_locs.front()), w.data(), w.size() * sizeof(int));
 
     // 2- write msg to remote side
-    std::cout << "writing msg ...\n";
+    Logger::instance().log("writing msg ...\n");
+
     (void)norm::write(conn_data, {w.size() * sizeof(int)}, {LocalInfo()}, NetFlags(),
                       RemoteInfo(), latency, posted_wqes);
-    std::cout << "  msg wrote = ";
+
+    Logger::instance().log("  msg wrote = ");
     for(const auto& i : w) {
-      std::cout << i << " ";
+      Logger::instance().log(std::to_string(i) + " ");
     }
-    std::cout << "\n";
+    Logger::instance().log("\n");
 
     //clear local memory
     std::memset(castV(reg_info.addr_locs.front()), 0, w.size() * sizeof(int));
 
     // Training step
-    std::cout << "  FLTrust returned: ";
+    Logger::instance().log("  FLTrust returned: ");
     w[1] = runMNISTTrain();
     for(const auto& i : w) {
-      std::cout << i << " ";
+      Logger::instance().log(std::to_string(i) + " ");
     }
-    std::cout << "\n";
+    Logger::instance().log("\n");
 
     std::this_thread::sleep_for(std::chrono::seconds(1)); // TODO: proper synchronization
 
     // update weights
     std::array<int, 3> msg;
     std::memcpy(msg.data(), castV(reg_info.addr_locs.front()), w.size() * sizeof(int));
-    std::cout << "  Received msg: ";
+    Logger::instance().log("  Received msg: ");
+
     for(const auto& i : msg) {
-      std::cout << i << " ";
+      Logger::instance().log(std::to_string(i) + " ");
     }
-    std::cout << "\n";
+    Logger::instance().log("\n");
 
     // HERE I WOULD AGREGGATE THE WEIGHTS
     for(int i = 0; i < w.size(); i++) {
       w[i] += msg[2];
     }
-    std::cout << "  Updated weights: ";
+
+    Logger::instance().log("  Updated weights: ");
     for(const auto& i : w) {
-      std::cout << i << " ";
+      Logger::instance().log(std::to_string(i) + " ");
+
     }
-    std::cout << "\n";
+    Logger::instance().log("\n");
+
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
   }
 
+  std::cout << "Server done\n";
+
   // sleep for server to be available
-  std::cout << "Sleeping for 1 hour\n";
+  Logger::instance().log("Sleeping for 1 hour\n");
+
   std::this_thread::sleep_for(std::chrono::hours(1));
   return 0;
 }

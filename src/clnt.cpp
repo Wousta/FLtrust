@@ -2,7 +2,9 @@
 #include "../../rdma-api/include/rdma-api.hpp"
 #include "../../shared/util.hpp"
 #include "include/mnistTrain.hpp"
-#include "include/training.hpp"
+#include "include/globalConstants.hpp"
+
+#include <logger.hpp>
 #include <lyra/lyra.hpp>
 //#include <torch/torch.h>
 #include <memory>
@@ -25,6 +27,7 @@ std::array<int, 3> modelUpdate(std::array<int, 3> w) {
 }
 
 int main(int argc, char *argv[]) {
+  Logger::instance().log("Client starting execution...");
 
   std::string srvr_ip;
   std::string port;
@@ -59,7 +62,7 @@ int main(int argc, char *argv[]) {
     // connect to server
     RcConn conn;
 
-    std::cout << "Connecting to server W\n";
+    Logger::instance().log("Connecting to server W\n");
     int ret = conn.connect(addr_info, reg_info);
     comm_info conn_data = conn.getConnData();
 
@@ -70,28 +73,33 @@ int main(int argc, char *argv[]) {
     std::memcpy(msg.data(), castV(reg_info.addr_locs.front()), w.size() * sizeof(int));
 
     // Training step
-    std::cout << "  FLTrust returned: ";
+    Logger::instance().log("FLTrust returned:");
+
     w[0] = runMNISTTrain();
     w[1] = msg[1];
     w[2] = w[0] + w[1];
     for(const auto& i : w) {
-      std::cout << i << " ";
+      Logger::instance().log(std::to_string(i) + " ");
     }
-    std::cout << "\n";
+    Logger::instance().log("\n");
 
     // Send updated model to server
     std::memcpy(castV(reg_info.addr_locs.front()), w.data(), w.size() * sizeof(int));
-    std::cout << "  writing msg ...\n";
+    Logger::instance().log("writing msg ...\n");
+
     (void)norm::write(conn_data, {w.size() * sizeof(int)}, {LocalInfo()}, NetFlags(),
                       RemoteInfo(), latency, posted_wqes);
 
-    std::cout << "  msg wrote = ";
+    Logger::instance().log("  msg wrote =");
+
     for(const auto& i : w) {
-      std::cout << i << " ";
+      Logger::instance().log(std::to_string(i) + " ");
     }
-    std::cout << "\n";
+    Logger::instance().log("\n");
 
   }
+
+  std::cout << "Client done\n";
 
   return 0;
 }
