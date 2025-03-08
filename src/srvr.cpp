@@ -47,11 +47,9 @@ int main(int argc, char *argv[]) {
   std::array<int, 3> w = {0, 0, 0};
   for(int i = 0; i < GLOBAL_ITERS; i++) {
 
-    // accept client conn requests
+    // accept client conn requests and extract info
     RcConn conn;
-    int ret = conn.connect(addr_info, reg_info);
-
-    // extract conn Info
+    int ret = conn.acceptConn(addr_info, reg_info);
     comm_info conn_data = conn.getConnData();
 
     // 1- copy data to write in your local memory
@@ -61,7 +59,7 @@ int main(int argc, char *argv[]) {
     std::cout << "writing msg ...\n";
     (void)norm::write(conn_data, {w.size() * sizeof(int)}, {LocalInfo()}, NetFlags(),
                       RemoteInfo(), latency, posted_wqes);
-    std::cout << "msg wrote = ";
+    std::cout << "  msg wrote = ";
     for(const auto& i : w) {
       std::cout << i << " ";
     }
@@ -71,22 +69,33 @@ int main(int argc, char *argv[]) {
     std::memset(castV(reg_info.addr_locs.front()), 0, w.size() * sizeof(int));
 
     // Training step
-    std::cout << "FLTrust returned: ";
-    w[0] = runMNISTTrain();
+    std::cout << "  FLTrust returned: ";
+    w[1] = runMNISTTrain();
     for(const auto& i : w) {
       std::cout << i << " ";
     }
     std::cout << "\n";
 
-    // // 1- read remote info to ur local mem
-    // std::cout << "reading msg ...\n";
-    // (void)norm::read(conn_data, {msg.length()}, {LocalInfo()}, NetFlags(),
-    //                 RemoteInfo(), latency, posted_wqes);
+    std::this_thread::sleep_for(std::chrono::seconds(1)); // TODO: proper synchronization
 
+    // update weights
+    std::array<int, 3> msg;
+    std::memcpy(msg.data(), castV(reg_info.addr_locs.front()), w.size() * sizeof(int));
+    std::cout << "  Received msg: ";
+    for(const auto& i : msg) {
+      std::cout << i << " ";
+    }
+    std::cout << "\n";
 
-    // std::cout << "Accepting clients requests\n";
-
-    // int ret = conn.acceptConn(addr_info, reg_info);
+    // HERE I WOULD AGREGGATE THE WEIGHTS
+    for(int i = 0; i < w.size(); i++) {
+      w[i] += msg[2];
+    }
+    std::cout << "  Updated weights: ";
+    for(const auto& i : w) {
+      std::cout << i << " ";
+    }
+    std::cout << "\n";
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
