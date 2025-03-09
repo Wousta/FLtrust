@@ -8,5 +8,7 @@ mkdir build
 cd build
 export PATH="/home/bustaman/.local/bin:$PATH"
 conan install .. --output-folder=. --build=missing
-cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=Debug ..
+cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+      -DCMAKE_BUILD_TYPE=Debug \
+      -DTorch_DIR="/home/bustaman/libtorch/share/cmake/Torch" ..
 cmake --build .
