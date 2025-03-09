@@ -11,13 +11,14 @@
 #include <lyra/lyra.hpp>
 #include <string>
 #include <thread>
-//#include <torch/torch.h>
+#include <torch/torch.h>
 
 #define MSG_SZ 32
 using ltncyVec = std::vector<std::pair<int, std::chrono::nanoseconds::rep>>;
 
 int main(int argc, char *argv[]) {
-  Logger::instance().log("Server starting execution...");
+  int n_clients = std::stoi(argv[argc -1]);
+  Logger::instance().log("Server starting execution with id: " + std::to_string(0) + "\n");
 
   std::string srvr_ip;
   std::string port;
@@ -25,11 +26,12 @@ int main(int argc, char *argv[]) {
   AddrInfo addr_info;
   RegInfo reg_info;
   std::shared_ptr<ltncyVec> latency = std::make_shared<ltncyVec>();
+
   latency->reserve(10);
   auto cli = lyra::cli() |
              lyra::opt(srvr_ip, "srvr_ip")["-i"]["--srvr_ip"]("srvr_ip") |
              lyra::opt(port, "port")["-p"]["--port"]("port");
-  auto result = cli.parse({argc, argv});
+  auto result = cli.parse({argc - 1, argv});
   if (!result) {
     std::cerr << "Error in command line: " << result.errorMessage()
               << std::endl;
@@ -37,17 +39,18 @@ int main(int argc, char *argv[]) {
   }
 
   // mr data and addr
-  uint64_t reg_sz = 4096;
-  reg_info.addr_locs.push_back(castI(malloc(reg_sz)));
-  reg_info.data_sizes.push_back(reg_sz);
+  uint64_t reg_sz_data = 87360;
+  reg_info.addr_locs.push_back(castI(malloc(reg_sz_data)));
+  reg_info.data_sizes.push_back(reg_sz_data);
   reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
                          IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+
   // addr
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
   addr_info.port = strdup(port.c_str());
-
   
-  std::array<int, 3> w = {0, 0, 0};
+  //std::vector<torch::Tensor> w = runMNISTTrain();
+  std::vector<torch::Tensor> w = runMNISTTrainDummy();
   for(int i = 0; i < GLOBAL_ITERS; i++) {
 
     // accept client conn requests and extract info
@@ -55,55 +58,72 @@ int main(int argc, char *argv[]) {
     int ret = conn.acceptConn(addr_info, reg_info);
     comm_info conn_data = conn.getConnData();
 
-    // 1- copy data to write in your local memory
-    std::memcpy(castV(reg_info.addr_locs.front()), w.data(), w.size() * sizeof(int));
+    // Flatten and concatenate all parameters into one contiguous tensor.
+    auto w_flat = torch::cat(w).contiguous();
+    size_t total_bytes = w_flat.numel() * sizeof(float);
+    float* raw_ptr = w_flat.data_ptr<float>();
 
-    // 2- write msg to remote side
+    // Send the number of elements in the tensor to the client.
+    int64_t numel = w_flat.numel();
+    //std::memcpy(castV(reg_info.addr_locs.front()), &numel, sizeof(int64_t));
+
+    // (void)norm::write(conn_data, {sizeof(uint64_t)}, {LocalInfo()}, NetFlags(),
+    //                   RemoteInfo(), latency, posted_wqes);
+
+    std::cout << "number of elements in w_flat server: " << w_flat.numel() << std::endl;
+    std::cout << "total bytes: " << total_bytes << std::endl;
+
+    // // 1- copy data to write in your local memory
+    std::memcpy(castV(reg_info.addr_locs.front()), raw_ptr, total_bytes);
+
+    // // 2- write msg to remote side
     Logger::instance().log("writing msg ...\n");
 
-    (void)norm::write(conn_data, {w.size() * sizeof(int)}, {LocalInfo()}, NetFlags(),
+    unsigned int total_bytes_int = static_cast<unsigned int>(total_bytes);
+    (void)norm::write(conn_data, {total_bytes_int}, {LocalInfo()}, NetFlags(),
                       RemoteInfo(), latency, posted_wqes);
 
-    Logger::instance().log("  msg wrote = ");
-    for(const auto& i : w) {
-      Logger::instance().log(std::to_string(i) + " ");
-    }
-    Logger::instance().log("\n");
 
-    //clear local memory
-    std::memset(castV(reg_info.addr_locs.front()), 0, w.size() * sizeof(int));
+    // Logger::instance().log("  msg wrote in w_flat\n");
 
-    // Training step
-    Logger::instance().log("  FLTrust returned: ");
-    w[1] = runMNISTTrain();
-    for(const auto& i : w) {
-      Logger::instance().log(std::to_string(i) + " ");
-    }
-    Logger::instance().log("\n");
 
-    std::this_thread::sleep_for(std::chrono::seconds(1)); // TODO: proper synchronization
+    // // //clear local memory
+    std::memset(castV(reg_info.addr_locs.front()), 0, reg_info.data_sizes.front());
 
-    // update weights
-    std::array<int, 3> msg;
-    std::memcpy(msg.data(), castV(reg_info.addr_locs.front()), w.size() * sizeof(int));
-    Logger::instance().log("  Received msg: ");
+    w = runMNISTTrainDummy();
 
-    for(const auto& i : msg) {
-      Logger::instance().log(std::to_string(i) + " ");
-    }
-    Logger::instance().log("\n");
+    // // Training step
+    // Logger::instance().log("  FLTrust returned: ");
+    // w = runMNISTTrain();
+    // for(const auto& i : w) {
+    //   Logger::instance().log(std::to_string(i) + " ");
+    // }
+    // Logger::instance().log("\n");
 
-    // HERE I WOULD AGREGGATE THE WEIGHTS
-    for(int i = 0; i < w.size(); i++) {
-      w[i] += msg[2];
-    }
+    // std::this_thread::sleep_for(std::chrono::seconds(1)); // TODO: proper synchronization
 
-    Logger::instance().log("  Updated weights: ");
-    for(const auto& i : w) {
-      Logger::instance().log(std::to_string(i) + " ");
+    // // update weights
+    // std::array<int, 3> msg;
+    // std::memcpy(msg.data(), castV(reg_info.addr_locs.front()), w.size() * sizeof(int));
+    // Logger::instance().log("  Received msg: ");
 
-    }
-    Logger::instance().log("\n");
+    // for(const auto& i : msg) {
+    //   Logger::instance().log(std::to_string(i) + " ");
+    // }
+    // Logger::instance().log("\n");
+
+
+    // // HERE I WOULD AGREGGATE THE WEIGHTS
+    // for(int i = 0; i < w.size(); i++) {
+    //   w[i] += msg[2];
+    // }
+
+    // Logger::instance().log("  Updated weights: ");
+    // for(const auto& i : w) {
+    //   Logger::instance().log(std::to_string(i) + " ");
+
+    // }
+    // Logger::instance().log("\n");
 
 
     std::this_thread::sleep_for(std::chrono::seconds(1));

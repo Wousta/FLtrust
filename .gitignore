@@ -67,3 +67,4 @@ pkg/
 # Build directory
 build/
 data/
+logs/

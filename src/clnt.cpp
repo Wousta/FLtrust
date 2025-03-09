@@ -6,7 +6,7 @@
 
 #include <logger.hpp>
 #include <lyra/lyra.hpp>
-//#include <torch/torch.h>
+#include <torch/torch.h>
 #include <memory>
 #include <string>
 #include <thread>
@@ -15,19 +15,9 @@
 #define MSG_SZ 32
 using ltncyVec = std::vector<std::pair<int, std::chrono::nanoseconds::rep>>;
 
-std::array<int, 3> modelUpdate(std::array<int, 3> w) {
-  // Training step
-  std::cout << "FLTrust returned: ";
-  w[1] = runMNISTTrain();
-  for(const auto& i : w) {
-    std::cout << i << " ";
-  }
-  std::cout << "\n";
-  return w;
-}
-
 int main(int argc, char *argv[]) {
-  Logger::instance().log("Client starting execution...");
+  int id = std::stoi(argv[argc -1]);
+  Logger::instance().log("Client starting execution with id: " + std::to_string(id) + "\n");
 
   std::string srvr_ip;
   std::string port;
@@ -39,25 +29,26 @@ int main(int argc, char *argv[]) {
   auto cli = lyra::cli() |
              lyra::opt(srvr_ip, "srvr_ip")["-i"]["--srvr_ip"]("srvr_ip") |
              lyra::opt(port, "port")["-p"]["--port"]("port");
-  auto result = cli.parse({argc, argv});
+  auto result = cli.parse({argc - 1, argv});
   if (!result) {
     std::cerr << "Error in command line: " << result.errorMessage()
               << std::endl;
     return 1;
   }
 
-  // mr data
-  uint64_t reg_sz = 4096;
-  reg_info.addr_locs.push_back(castI(malloc(reg_sz)));
-  reg_info.data_sizes.push_back(reg_sz);
+  // mr data and addr
+  uint64_t reg_sz_data = 87392;
+  reg_info.addr_locs.push_back(castI(malloc(reg_sz_data)));
+  reg_info.data_sizes.push_back(reg_sz_data);
   reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
                          IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+
   // addr
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
   addr_info.port = strdup(port.c_str());
 
 
-  std::array<int, 3> w = {0, 0, 0};
+  std::vector<torch::Tensor> w = runMNISTTrainDummy();
   for(int i = 0; i < GLOBAL_ITERS; i++) {
     // connect to server
     RcConn conn;
@@ -68,34 +59,40 @@ int main(int argc, char *argv[]) {
 
     std::this_thread::sleep_for(std::chrono::seconds(1)); // TODO: proper synchronization
     
-    // 2- verify local mem
-    std::array<int, 3> msg;
-    std::memcpy(msg.data(), castV(reg_info.addr_locs.front()), w.size() * sizeof(int));
+    // 2- Get number of elements in the tensor from the server
+    // int64_t numel;
+    // std::memcpy(&numel, castV(reg_info.addr_locs.front()), sizeof(numel));
 
-    // Training step
-    Logger::instance().log("FLTrust returned:");
+    // std::cout << "number of elements in w_flat client: " << numel << std::endl;
 
-    w[0] = runMNISTTrain();
-    w[1] = msg[1];
-    w[2] = w[0] + w[1];
-    for(const auto& i : w) {
-      Logger::instance().log(std::to_string(i) + " ");
-    }
-    Logger::instance().log("\n");
+    std::this_thread::sleep_for(std::chrono::seconds(1)); // TODO: proper synchronization
+
+    // Read the updated weights from the server
+    size_t total_bytes = reg_info.data_sizes.front();
+    size_t numel_server = total_bytes / sizeof(float);
+    float* server_data = static_cast<float*>(castV(reg_info.addr_locs.front()));
+
+    // Option 2: Create a tensor from the raw data (and clone it to own its memory)
+    auto updated_tensor = torch::from_blob(server_data, {static_cast<long>(numel_server)}, torch::kFloat32).clone();
+
+    std::cout << "Number of elements in updated tensor: " << updated_tensor.numel() << std::endl;
+    // For verification, print the first few updated weight values.
+    std::cout << "Updated weights from server:" << std::endl;
+    std::cout << updated_tensor.slice(0, 0, std::min(numel_server, size_t(10))) << std::endl;
 
     // Send updated model to server
-    std::memcpy(castV(reg_info.addr_locs.front()), w.data(), w.size() * sizeof(int));
-    Logger::instance().log("writing msg ...\n");
+    // std::memcpy(castV(reg_info.addr_locs.front()), w.data(), w.size() * sizeof(int));
+    // Logger::instance().log("writing msg ...\n");
 
-    (void)norm::write(conn_data, {w.size() * sizeof(int)}, {LocalInfo()}, NetFlags(),
-                      RemoteInfo(), latency, posted_wqes);
+    // (void)norm::write(conn_data, {w.size() * sizeof(int)}, {LocalInfo()}, NetFlags(),
+    //                   RemoteInfo(), latency, posted_wqes);
 
-    Logger::instance().log("  msg wrote =");
+    // Logger::instance().log("  msg wrote =");
 
-    for(const auto& i : w) {
-      Logger::instance().log(std::to_string(i) + " ");
-    }
-    Logger::instance().log("\n");
+    // for(const auto& i : w) {
+    //   Logger::instance().log(std::to_string(i) + " ");
+    // }
+    // Logger::instance().log("\n");
 
   }
 
