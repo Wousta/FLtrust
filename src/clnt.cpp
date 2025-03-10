@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
   }
 
   // mr data and addr
-  uint64_t reg_sz_data = 87392;
+  uint64_t reg_sz_data = REG_SZ_DATA;
   reg_info.addr_locs.push_back(castI(malloc(reg_sz_data)));
   reg_info.data_sizes.push_back(reg_sz_data);
   reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
@@ -48,7 +48,7 @@ int main(int argc, char *argv[]) {
   addr_info.port = strdup(port.c_str());
 
 
-  std::vector<torch::Tensor> w = runMNISTTrainDummy();
+  std::vector<torch::Tensor> w;
   for(int i = 0; i < GLOBAL_ITERS; i++) {
     // connect to server
     RcConn conn;
@@ -57,42 +57,48 @@ int main(int argc, char *argv[]) {
     int ret = conn.connect(addr_info, reg_info);
     comm_info conn_data = conn.getConnData();
 
-    std::this_thread::sleep_for(std::chrono::seconds(1)); // TODO: proper synchronization
-    
-    // 2- Get number of elements in the tensor from the server
-    // int64_t numel;
-    // std::memcpy(&numel, castV(reg_info.addr_locs.front()), sizeof(numel));
-
-    // std::cout << "number of elements in w_flat client: " << numel << std::endl;
-
-    std::this_thread::sleep_for(std::chrono::seconds(1)); // TODO: proper synchronization
-
     // Read the updated weights from the server
     size_t total_bytes = reg_info.data_sizes.front();
     size_t numel_server = total_bytes / sizeof(float);
     float* server_data = static_cast<float*>(castV(reg_info.addr_locs.front()));
 
-    // Option 2: Create a tensor from the raw data (and clone it to own its memory)
+    // Create a tensor from the raw data (and clone it to own its memory)
     auto updated_tensor = torch::from_blob(server_data, {static_cast<long>(numel_server)}, torch::kFloat32).clone();
 
-    std::cout << "Number of elements in updated tensor: " << updated_tensor.numel() << std::endl;
-    // For verification, print the first few updated weight values.
-    std::cout << "Updated weights from server:" << std::endl;
-    std::cout << updated_tensor.slice(0, 0, std::min(numel_server, size_t(10))) << std::endl;
+    w = {updated_tensor};
 
-    // Send updated model to server
-    // std::memcpy(castV(reg_info.addr_locs.front()), w.data(), w.size() * sizeof(int));
-    // Logger::instance().log("writing msg ...\n");
+    // Log the number of elements and print a slice (using ostringstream to capture tensor printing)
+    std::ostringstream oss;
+    oss << "Number of elements in updated tensor: " << updated_tensor.numel() << "\n";
+    oss << "Updated weights from server:" << "\n";
+    oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 10)) << "\n";
+    Logger::instance().log(oss.str());
 
-    // (void)norm::write(conn_data, {w.size() * sizeof(int)}, {LocalInfo()}, NetFlags(),
-    //                   RemoteInfo(), latency, posted_wqes);
+    // Run the training on the updated weights
+    std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
 
-    // Logger::instance().log("  msg wrote =");
+    // // Send the updated weights back to the server
+    auto g_flat = torch::cat(g).contiguous();
+    size_t total_bytes_g = g_flat.numel() * sizeof(float);
+    float* raw_ptr_g = g_flat.data_ptr<float>();
 
-    // for(const auto& i : w) {
-    //   Logger::instance().log(std::to_string(i) + " ");
-    // }
-    // Logger::instance().log("\n");
+    // // 1- copy data to write in your local memory
+    std::memcpy(castV(reg_info.addr_locs.front()), raw_ptr_g, total_bytes_g);
+
+    // // 2- write msg to remote side
+    Logger::instance().log("writing msg ...\n");
+
+    // Print the first few updated weight values for verification
+    std::ostringstream oss;
+    oss << "Updated weights sent by client:" << "\n";
+    oss << g_flat.slice(0, 0, std::min<size_t>(g_flat.numel(), 10)) << "\n";
+    Logger::instance().log(oss.str());
+
+    unsigned int total_bytes_g_int = static_cast<unsigned int>(total_bytes_g);
+    (void)norm::write(conn_data, {total_bytes_g_int}, {LocalInfo()}, NetFlags(),
+                      RemoteInfo(), latency, posted_wqes);
+
+    Logger::instance().log("Client: Done with iteration\n");
 
   }
 

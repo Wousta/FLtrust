@@ -16,6 +16,7 @@
 #define MSG_SZ 32
 using ltncyVec = std::vector<std::pair<int, std::chrono::nanoseconds::rep>>;
 
+
 int main(int argc, char *argv[]) {
   int n_clients = std::stoi(argv[argc -1]);
   Logger::instance().log("Server starting execution with id: " + std::to_string(0) + "\n");
@@ -39,7 +40,7 @@ int main(int argc, char *argv[]) {
   }
 
   // mr data and addr
-  uint64_t reg_sz_data = 87360;
+  uint64_t reg_sz_data = REG_SZ_DATA;
   reg_info.addr_locs.push_back(castI(malloc(reg_sz_data)));
   reg_info.data_sizes.push_back(reg_sz_data);
   reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
@@ -49,10 +50,13 @@ int main(int argc, char *argv[]) {
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
   addr_info.port = strdup(port.c_str());
   
+  // Create a dummy set of weights, needed for first call to runMNISTTrain():
+  std::vector<torch::Tensor> w_dummy;
+  w_dummy.push_back(torch::randn({10}, torch::kFloat32)); 
   //std::vector<torch::Tensor> w = runMNISTTrain();
-  std::vector<torch::Tensor> w = runMNISTTrainDummy();
-  for(int i = 0; i < GLOBAL_ITERS; i++) {
 
+  std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
+  for(int i = 0; i < GLOBAL_ITERS; i++) {
     // accept client conn requests and extract info
     RcConn conn;
     int ret = conn.acceptConn(addr_info, reg_info);
@@ -65,10 +69,6 @@ int main(int argc, char *argv[]) {
 
     // Send the number of elements in the tensor to the client.
     int64_t numel = w_flat.numel();
-    //std::memcpy(castV(reg_info.addr_locs.front()), &numel, sizeof(int64_t));
-
-    // (void)norm::write(conn_data, {sizeof(uint64_t)}, {LocalInfo()}, NetFlags(),
-    //                   RemoteInfo(), latency, posted_wqes);
 
     std::cout << "number of elements in w_flat server: " << w_flat.numel() << std::endl;
     std::cout << "total bytes: " << total_bytes << std::endl;
@@ -83,48 +83,21 @@ int main(int argc, char *argv[]) {
     (void)norm::write(conn_data, {total_bytes_int}, {LocalInfo()}, NetFlags(),
                       RemoteInfo(), latency, posted_wqes);
 
+    std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
 
-    // Logger::instance().log("  msg wrote in w_flat\n");
+    // Read the weights sent by the client
+    size_t total_bytes_g = reg_info.data_sizes.front();
+    size_t numel_server = total_bytes_g / sizeof(float);
+    float* client_data = static_cast<float*>(castV(reg_info.addr_locs.front()));
 
+    // Create a tensor from the raw data (and clone it to own its memory)
+    auto updated_tensor = torch::from_blob(client_data, {static_cast<long>(numel_server)}, torch::kFloat32).clone();
 
-    // // //clear local memory
-    std::memset(castV(reg_info.addr_locs.front()), 0, reg_info.data_sizes.front());
+    std::vector<torch::Tensor> g_client = {updated_tensor};
 
-    w = runMNISTTrainDummy();
-
-    // // Training step
-    // Logger::instance().log("  FLTrust returned: ");
-    // w = runMNISTTrain();
-    // for(const auto& i : w) {
-    //   Logger::instance().log(std::to_string(i) + " ");
-    // }
-    // Logger::instance().log("\n");
-
-    // std::this_thread::sleep_for(std::chrono::seconds(1)); // TODO: proper synchronization
-
-    // // update weights
-    // std::array<int, 3> msg;
-    // std::memcpy(msg.data(), castV(reg_info.addr_locs.front()), w.size() * sizeof(int));
-    // Logger::instance().log("  Received msg: ");
-
-    // for(const auto& i : msg) {
-    //   Logger::instance().log(std::to_string(i) + " ");
-    // }
-    // Logger::instance().log("\n");
-
-
-    // // HERE I WOULD AGREGGATE THE WEIGHTS
-    // for(int i = 0; i < w.size(); i++) {
-    //   w[i] += msg[2];
-    // }
-
-    // Logger::instance().log("  Updated weights: ");
-    // for(const auto& i : w) {
-    //   Logger::instance().log(std::to_string(i) + " ");
-
-    // }
-    // Logger::instance().log("\n");
-
+    // For verification, print the first few updated weight values.
+    std::cout << "Updated weights from client:" << std::endl;
+    std::cout << g_client[0].slice(0, 0, std::min<size_t>(g_client[0].numel(), 10)) << std::endl;
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
 

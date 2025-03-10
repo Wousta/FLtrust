@@ -29,18 +29,13 @@ const int64_t kNumberOfEpochs = 1;
 // After how many batches to log a new update with the loss value.
 const int64_t kLogInterval = 1;
 
-std::vector<torch::Tensor> runMNISTTrainDummy() {
+std::vector<torch::Tensor> runMNISTTrainDummy(std::vector<torch::Tensor>& w) {
   std::cout << "Running dummy MNIST training\n";
-  // static counter to update the tensor value each time the function is called
-  static int dummy_value = 0;
-  dummy_value++;
-
-  std::vector<torch::Tensor> w;
-  // Create 10 small tensors which update based on dummy_value.
-  for (int i = 0; i < 10; i++) {
-    // Each tensor here holds one float; it will be different each call.
-    w.push_back(torch::tensor({static_cast<float>(dummy_value + i)}, torch::kFloat32));
+  
+  for(size_t i = 0; i < w.size(); i++) {
+    w[i] = w[i] + 1;  // element-wise addition of 1
   }
+  
   return w;
 }
 
@@ -105,7 +100,7 @@ void test(
   Logger::instance().log("Testing donete\n");
 }
 
-std::vector<torch::Tensor> runMNISTTrain() {
+std::vector<torch::Tensor> runMNISTTrain(const std::vector<torch::Tensor>& w) {
   torch::manual_seed(1);
 
   torch::DeviceType device_type;
@@ -120,6 +115,18 @@ std::vector<torch::Tensor> runMNISTTrain() {
 
   //Net model;
   model.to(device);
+
+  // Update the model parameters with the values of W
+  auto params = model.parameters();
+  if(w.size() != params.size()) {
+    Logger::instance().log("Model parameters size does not match the input tensor size, if this is the first call to mnistTrain() it is ok.\n");
+  } else {
+    int idx = 0;
+    for(auto& param : params) {
+      param.data().copy_(w[idx]);
+      idx++;
+    }
+  }
 
   auto train_dataset = torch::data::datasets::MNIST(kDataRoot)
                            .map(torch::data::transforms::Normalize<>(0.1307, 0.3081))
@@ -142,7 +149,6 @@ std::vector<torch::Tensor> runMNISTTrain() {
 
   for (size_t epoch = 1; epoch <= kNumberOfEpochs; ++epoch) {
     train(epoch, model, device, *train_loader, optimizer, train_dataset_size);
-    std::printf("now we test\n");
     test(model, device, *test_loader, test_dataset_size);
   }
 
