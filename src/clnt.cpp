@@ -38,7 +38,10 @@ int main(int argc, char *argv[]) {
 
   // mr data and addr
   uint64_t reg_sz_data = REG_SZ_DATA;
+  uint64_t step = sizeof(uint64_t);
+  reg_info.addr_locs.push_back(castI(malloc(step)));
   reg_info.addr_locs.push_back(castI(malloc(reg_sz_data)));
+  reg_info.data_sizes.push_back(reg_sz_data);
   reg_info.data_sizes.push_back(reg_sz_data);
   reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
                          IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
@@ -47,32 +50,39 @@ int main(int argc, char *argv[]) {
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
   addr_info.port = strdup(port.c_str());
 
+  // connect to server
+  RcConn conn;
+
+  Logger::instance().log("Connecting to server W\n");
+  int ret = conn.connect(addr_info, reg_info);
+  comm_info conn_data = conn.getConnData();
+
+  LocalInfo loc_info;
+  loc_info.offs.push_back(0);  // for the first region, start at 0 of that region
+  loc_info.offs.push_back(0);  // for the second region, start at 0 of that region
 
   std::vector<torch::Tensor> w;
-  for(int i = 0; i < GLOBAL_ITERS; i++) {
-    // connect to server
-    RcConn conn;
-
-    Logger::instance().log("Connecting to server W\n");
-    int ret = conn.connect(addr_info, reg_info);
-    comm_info conn_data = conn.getConnData();
+  int i = 0;
+  for(i = 0; i < GLOBAL_ITERS; i++) {
 
     // Read the updated weights from the server
-    size_t total_bytes = reg_info.data_sizes.front();
+    size_t total_bytes = reg_info.data_sizes[1];
     size_t numel_server = total_bytes / sizeof(float);
-    float* server_data = static_cast<float*>(castV(reg_info.addr_locs.front()));
+    float* server_data = static_cast<float*>(castV(reg_info.addr_locs[1]));
 
     // Create a tensor from the raw data (and clone it to own its memory)
     auto updated_tensor = torch::from_blob(server_data, {static_cast<long>(numel_server)}, torch::kFloat32).clone();
 
     w = {updated_tensor};
 
-    // Log the number of elements and print a slice (using ostringstream to capture tensor printing)
-    std::ostringstream oss;
-    oss << "Number of elements in updated tensor: " << updated_tensor.numel() << "\n";
-    oss << "Updated weights from server:" << "\n";
-    oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 10)) << "\n";
-    Logger::instance().log(oss.str());
+    // Print the first few updated weight values from server
+    {
+      std::ostringstream oss;
+      oss << "Number of elements in updated tensor: " << updated_tensor.numel() << "\n";
+      oss << "Updated weights from server:" << "\n";
+      oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 10)) << "\n";
+      Logger::instance().log(oss.str());
+    }
 
     // Run the training on the updated weights
     std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
@@ -83,26 +93,28 @@ int main(int argc, char *argv[]) {
     float* raw_ptr_g = g_flat.data_ptr<float>();
 
     // // 1- copy data to write in your local memory
-    std::memcpy(castV(reg_info.addr_locs.front()), raw_ptr_g, total_bytes_g);
+    std::memcpy(castV(reg_info.addr_locs[1]), raw_ptr_g, total_bytes_g);
 
     // // 2- write msg to remote side
     Logger::instance().log("writing msg ...\n");
 
-    // Print the first few updated weight values for verification
-    std::ostringstream oss;
-    oss << "Updated weights sent by client:" << "\n";
-    oss << g_flat.slice(0, 0, std::min<size_t>(g_flat.numel(), 10)) << "\n";
-    Logger::instance().log(oss.str());
+    // Print the first few updated weights sent by client
+    {
+      std::ostringstream oss;
+      oss << "Updated weights sent by client:" << "\n";
+      oss << g_flat.slice(0, 0, std::min<size_t>(g_flat.numel(), 10)) << "\n";
+      Logger::instance().log(oss.str());
+    }
 
     unsigned int total_bytes_g_int = static_cast<unsigned int>(total_bytes_g);
-    (void)norm::write(conn_data, {total_bytes_g_int}, {LocalInfo()}, NetFlags(),
+    (void)norm::write(conn_data, {total_bytes_g_int}, {loc_info}, NetFlags(),
                       RemoteInfo(), latency, posted_wqes);
 
     Logger::instance().log("Client: Done with iteration\n");
 
   }
 
-  std::cout << "Client done\n";
+  std::cout << "Client done iters: " << i << "\n";
 
   return 0;
 }

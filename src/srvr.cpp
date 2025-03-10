@@ -40,8 +40,12 @@ int main(int argc, char *argv[]) {
   }
 
   // mr data and addr
+  // mr data and addr
   uint64_t reg_sz_data = REG_SZ_DATA;
+  uint64_t step = sizeof(uint64_t);
+  reg_info.addr_locs.push_back(castI(malloc(step)));
   reg_info.addr_locs.push_back(castI(malloc(reg_sz_data)));
+  reg_info.data_sizes.push_back(reg_sz_data);
   reg_info.data_sizes.push_back(reg_sz_data);
   reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
                          IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
@@ -49,6 +53,15 @@ int main(int argc, char *argv[]) {
   // addr
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
   addr_info.port = strdup(port.c_str());
+
+  // accept client conn requests and extract info
+  RcConn conn;
+  int ret = conn.acceptConn(addr_info, reg_info);
+  comm_info conn_data = conn.getConnData();
+
+  LocalInfo loc_info;
+  loc_info.offs.push_back(0);  // for the first region, start at 0 of that region
+  loc_info.offs.push_back(0);  // for the second region, start at 0 of that region
   
   // Create a dummy set of weights, needed for first call to runMNISTTrain():
   std::vector<torch::Tensor> w_dummy;
@@ -57,10 +70,6 @@ int main(int argc, char *argv[]) {
 
   std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
   for(int i = 0; i < GLOBAL_ITERS; i++) {
-    // accept client conn requests and extract info
-    RcConn conn;
-    int ret = conn.acceptConn(addr_info, reg_info);
-    comm_info conn_data = conn.getConnData();
 
     // Flatten and concatenate all parameters into one contiguous tensor.
     auto w_flat = torch::cat(w).contiguous();
@@ -74,21 +83,24 @@ int main(int argc, char *argv[]) {
     std::cout << "total bytes: " << total_bytes << std::endl;
 
     // // 1- copy data to write in your local memory
-    std::memcpy(castV(reg_info.addr_locs.front()), raw_ptr, total_bytes);
+    std::memcpy(castV(reg_info.addr_locs[1]), raw_ptr, total_bytes);
 
     // // 2- write msg to remote side
     Logger::instance().log("writing msg ...\n");
 
     unsigned int total_bytes_int = static_cast<unsigned int>(total_bytes);
-    (void)norm::write(conn_data, {total_bytes_int}, {LocalInfo()}, NetFlags(),
+    (void)norm::write(conn_data, {total_bytes_int}, {loc_info}, NetFlags(),
                       RemoteInfo(), latency, posted_wqes);
 
     std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
 
+    // TODO: proper synch of client sending back weights
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
     // Read the weights sent by the client
-    size_t total_bytes_g = reg_info.data_sizes.front();
+    size_t total_bytes_g = reg_info.data_sizes[1];
     size_t numel_server = total_bytes_g / sizeof(float);
-    float* client_data = static_cast<float*>(castV(reg_info.addr_locs.front()));
+    float* client_data = static_cast<float*>(castV(reg_info.addr_locs[1]));
 
     // Create a tensor from the raw data (and clone it to own its memory)
     auto updated_tensor = torch::from_blob(client_data, {static_cast<long>(numel_server)}, torch::kFloat32).clone();
@@ -98,9 +110,7 @@ int main(int argc, char *argv[]) {
     // For verification, print the first few updated weight values.
     std::cout << "Updated weights from client:" << std::endl;
     std::cout << g_client[0].slice(0, 0, std::min<size_t>(g_client[0].numel(), 10)) << std::endl;
-
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-
+    
   }
 
   std::cout << "Server done\n";
