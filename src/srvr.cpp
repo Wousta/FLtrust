@@ -48,12 +48,11 @@ int main(int argc, char *argv[]) {
 
   // mr data and addr
   uint64_t reg_sz_data = REG_SZ_DATA;
-  uint64_t step_sz = sizeof(uint64_t);
-
+  std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
   for(int i = 0; i < n_clients; i++) {
-    reg_info[i].addr_locs.push_back(castI(malloc(step_sz)));
+    reg_info[i].addr_locs.push_back(castI(cas_atomic));
     reg_info[i].addr_locs.push_back(castI(malloc(reg_sz_data)));
-    reg_info[i].data_sizes.push_back(step_sz);
+    reg_info[i].data_sizes.push_back(sizeof(uint64_t));
     reg_info[i].data_sizes.push_back(reg_sz_data);
     reg_info[i].permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
                                IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
@@ -75,27 +74,12 @@ int main(int argc, char *argv[]) {
   std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
   for(int i = 0; i < GLOBAL_ITERS; i++) {
 
-    // Flatten and concatenate all parameters into one contiguous tensor.
-    auto w_flat = torch::cat(w).contiguous();
-    size_t total_bytes = w_flat.numel() * sizeof(float);
-    float* raw_ptr = w_flat.data_ptr<float>();
-
-    // Send the number of elements in the tensor to the client.
-    int64_t numel = w_flat.numel();
-
-    std::cout << "number of elements in w_flat server: " << w_flat.numel() << std::endl;
-    std::cout << "total bytes: " << total_bytes << std::endl;
-
-    // // 2- write msg to remote side
-    Logger::instance().log("writing msg ...\n");
-
-    unsigned int total_bytes_int = static_cast<unsigned int>(total_bytes);
-    for(int i = 0; i < n_clients; i++) {
-      std::memcpy(castV(reg_info[i].addr_locs[1]), raw_ptr, total_bytes);
-      (void)norm::send(conn_data[i], {total_bytes_int}, {loc_info[i]}, NetFlags(), latency, posted_wqes);
+    uint64_t expected = 0;
+    if(cas_atomic->compare_exchange_strong(expected, 1)) {
+      std::cout << "CAS succeeded: value set to 1\n";
+    } else {
+        std::cout << "CAS failed: current value = " << cas_atomic->load() << "\n";
     }
-
-    std::cout << "server sent w to clients\n";
 
     std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
 
