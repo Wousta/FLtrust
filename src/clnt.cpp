@@ -60,10 +60,22 @@ int main(int argc, char *argv[]) {
   LocalInfo loc_info;
   loc_info.offs.push_back(0);  // for the first region, start at 0 of that region
   loc_info.offs.push_back(0);  // for the second region, start at 0 of that region
+  loc_info.indices.push_back(0); // first region index (if needed)
+  loc_info.indices.push_back(1); // second region index for data
 
   std::vector<torch::Tensor> w;
   int i = 0;
   for(i = 0; i < GLOBAL_ITERS; i++) {
+
+    std::vector<uint32_t> payload_sizes;
+    payload_sizes.push_back(static_cast<uint32_t>(reg_info.data_sizes[1]));
+    int rc = norm::receive(conn_data, {payload_sizes}, loc_info, NetFlags(), latency, posted_wqes);
+
+    if (rc != 0) {
+      Logger::instance().log("Client: Error posting receive\n");
+    }
+
+    std::cout << "Received data from server\n";
 
     // Read the updated weights from the server
     size_t total_bytes = reg_info.data_sizes[1];
@@ -88,27 +100,27 @@ int main(int argc, char *argv[]) {
     std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
 
     // // Send the updated weights back to the server
-    auto g_flat = torch::cat(g).contiguous();
-    size_t total_bytes_g = g_flat.numel() * sizeof(float);
-    float* raw_ptr_g = g_flat.data_ptr<float>();
+    // auto g_flat = torch::cat(g).contiguous();
+    // size_t total_bytes_g = g_flat.numel() * sizeof(float);
+    // float* raw_ptr_g = g_flat.data_ptr<float>();
 
     // // 1- copy data to write in your local memory
-    std::memcpy(castV(reg_info.addr_locs[1]), raw_ptr_g, total_bytes_g);
+    // std::memcpy(castV(reg_info.addr_locs[1]), raw_ptr_g, total_bytes_g);
 
     // // 2- write msg to remote side
-    Logger::instance().log("writing msg ...\n");
+    // Logger::instance().log("writing msg ...\n");
 
-    // Print the first few updated weights sent by client
-    {
-      std::ostringstream oss;
-      oss << "Updated weights sent by client:" << "\n";
-      oss << g_flat.slice(0, 0, std::min<size_t>(g_flat.numel(), 10)) << "\n";
-      Logger::instance().log(oss.str());
-    }
+    // // Print the first few updated weights sent by client
+    // {
+    //   std::ostringstream oss;
+    //   oss << "Updated weights sent by client:" << "\n";
+    //   oss << g_flat.slice(0, 0, std::min<size_t>(g_flat.numel(), 10)) << "\n";
+    //   Logger::instance().log(oss.str());
+    // }
 
-    unsigned int total_bytes_g_int = static_cast<unsigned int>(total_bytes_g);
-    (void)norm::write(conn_data, {total_bytes_g_int}, {loc_info}, NetFlags(),
-                      RemoteInfo(), latency, posted_wqes);
+    // unsigned int total_bytes_g_int = static_cast<unsigned int>(total_bytes_g);
+    // (void)norm::write(conn_data, {total_bytes_g_int}, {loc_info}, NetFlags(),
+    //                   RemoteInfo(), latency, posted_wqes);
 
     Logger::instance().log("Client: Done with iteration\n");
 
