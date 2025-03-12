@@ -47,13 +47,12 @@ int main(int argc, char *argv[]) {
   addr_info.port = strdup(port.c_str());
 
   // mr data and addr
-  uint64_t reg_sz_data = REG_SZ_DATA;
   std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
   for(int i = 0; i < n_clients; i++) {
     reg_info[i].addr_locs.push_back(castI(cas_atomic));
-    reg_info[i].addr_locs.push_back(castI(malloc(reg_sz_data)));
-    reg_info[i].data_sizes.push_back(sizeof(uint64_t));
-    reg_info[i].data_sizes.push_back(reg_sz_data);
+    reg_info[i].addr_locs.push_back(castI(malloc(REG_SZ_DATA)));
+    reg_info[i].data_sizes.push_back(CAS_SIZE);
+    reg_info[i].data_sizes.push_back(REG_SZ_DATA);
     reg_info[i].permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
                                IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
@@ -62,6 +61,7 @@ int main(int argc, char *argv[]) {
 
     loc_info[i].offs.push_back(0);
     loc_info[i].offs.push_back(0);
+    loc_info[i].indices.push_back(0);
     loc_info[i].indices.push_back(1);
   }
 

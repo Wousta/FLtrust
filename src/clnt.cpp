@@ -37,12 +37,11 @@ int main(int argc, char *argv[]) {
   }
 
   // mr data and addr
-  uint64_t reg_sz_data = REG_SZ_DATA;
-  uint64_t step = sizeof(uint64_t);
-  reg_info.addr_locs.push_back(castI(malloc(step)));
-  reg_info.addr_locs.push_back(castI(malloc(reg_sz_data)));
-  reg_info.data_sizes.push_back(reg_sz_data);
-  reg_info.data_sizes.push_back(reg_sz_data);
+  std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
+  reg_info.addr_locs.push_back(castI(castI(cas_atomic)));
+  reg_info.addr_locs.push_back(castI(malloc(REG_SZ_DATA)));
+  reg_info.data_sizes.push_back(CAS_SIZE);
+  reg_info.data_sizes.push_back(REG_SZ_DATA);
   reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
                          IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
@@ -67,17 +66,12 @@ int main(int argc, char *argv[]) {
   int i = 0;
   for(i = 0; i < GLOBAL_ITERS; i++) {
 
-    std::vector<uint32_t> payload_sizes;
-    payload_sizes.push_back(static_cast<uint32_t>(reg_info.data_sizes[1]));
-    int rc = norm::receive(conn_data, {payload_sizes}, loc_info, NetFlags(), latency, posted_wqes);
+    do {
+      (void)norm::read(conn_data, {CAS_SIZE}, {loc_info}, NetFlags(),
+                        RemoteInfo(), latency, posted_wqes);
+    } while(cas_atomic->load() != 1);
 
-    if (rc != 0) {
-      Logger::instance().log("Client: Error posting receive\n");
-    }
-
-    std::cout << "Received data from server\n";
-
-    // Read the updated weights from the server
+    // Read the weights from the server
     size_t total_bytes = reg_info.data_sizes[1];
     size_t numel_server = total_bytes / sizeof(float);
     float* server_data = static_cast<float*>(castV(reg_info.addr_locs[1]));
