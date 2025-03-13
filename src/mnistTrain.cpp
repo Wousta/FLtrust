@@ -1,8 +1,6 @@
 #include "include/mnistTrain.hpp"
 #include "include/logger.hpp"
 
-//#include <torch/torch.h>
-
 #include <cstddef>
 #include <cstdio>
 #include <iostream>

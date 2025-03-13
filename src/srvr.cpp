@@ -11,20 +11,35 @@
 #include <lyra/lyra.hpp>
 #include <string>
 #include <thread>
-#include <torch/torch.h>
+//#include <torch/torch.h>
 
-#define MSG_SZ 32
+#define MSG_SZ 322
 using ltncyVec = std::vector<std::pair<int, std::chrono::nanoseconds::rep>>;
 
 
-int main(int argc, char *argv[]) {
-  int n_clients = std::stoi(argv[argc -1]);
-  Logger::instance().log("Server starting execution with id: " + std::to_string(0) + "\n");
-
+int main(int argc, char* argv[]) {
+  Logger::instance().log("Server starting execution\n");
+  int n_clients;
+  
   std::string srvr_ip;
   std::string port;
   unsigned int posted_wqes;
   AddrInfo addr_info;
+  auto cli = lyra::cli() |
+    lyra::opt(srvr_ip, "srvr_ip")["-i"]["--srvr_ip"]("srvr_ip") |
+    lyra::opt(port, "port")["-p"]["--port"]("port") | 
+    lyra::opt(n_clients, "n_clients")["-w"]["--n_clients"]("n_clients");
+  auto result = cli.parse({ argc, argv });
+  if (!result) {
+    std::cerr << "Error in command line: " << result.errorMessage()
+      << std::endl;
+    return 1;
+  }
+
+  std::cout << "Server: n_clients = " << n_clients << "\n";
+  std::cout << "Server: srvr_ip = " << srvr_ip << "\n";
+  std::cout << "Server: port = " << port << "\n";
+
   std::vector<RegInfo> reg_info(n_clients);
   std::vector<RcConn> conns(n_clients);
   std::vector<comm_info> conn_data;
@@ -32,38 +47,32 @@ int main(int argc, char *argv[]) {
   std::shared_ptr<ltncyVec> latency = std::make_shared<ltncyVec>();
 
   latency->reserve(10);
-  auto cli = lyra::cli() |
-             lyra::opt(srvr_ip, "srvr_ip")["-i"]["--srvr_ip"]("srvr_ip") |
-             lyra::opt(port, "port")["-p"]["--port"]("port");
-  auto result = cli.parse({argc - 1, argv});
-  if (!result) {
-    std::cerr << "Error in command line: " << result.errorMessage()
-              << std::endl;
-    return 1;
-  }
 
   // addr
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
   addr_info.port = strdup(port.c_str());
 
   // stores the parameters W of the server, to be read by clients
-  float* srvr_w =  reinterpret_cast<float*> (malloc(REG_SZ_DATA));
+  float* srvr_w = reinterpret_cast<float*> (malloc(REG_SZ_DATA));
 
   // Flag that server modifies so clients can start reading
-  std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
-
+  //std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
+  int flag = 0;
   for (int i = 0; i < n_clients; i++) {
     std::atomic<uint64_t>* cas_client = new std::atomic<uint64_t>(0);
-    reg_info[i].addr_locs.push_back(castI(cas_atomic));
-    reg_info[i].addr_locs.push_back(castI(srvr_w));
-    //reg_info[i].addr_locs.push_back(castI(malloc(REG_SZ_DATA)));
-    //reg_info[i].addr_locs.push_back(castI(cas_client));
-    reg_info[i].data_sizes.push_back(CAS_SIZE);
-    reg_info[i].data_sizes.push_back(REG_SZ_DATA);
-    // reg_info[i].data_sizes.push_back(REG_SZ_DATA);
-    // reg_info[i].data_sizes.push_back(CAS_SIZE);
+    reg_info[i].addr_locs.push_back(castI(malloc(4096)));
+    reg_info[i].addr_locs.push_back(castI(malloc(4096)));
+    // reg_info[i].addr_locs.push_back(castI(&flag));
+    // reg_info[i].addr_locs.push_back(castI(srvr_w));
+    // //reg_info[i].addr_locs.push_back(castI(malloc(REG_SZ_DATA)));
+    // //reg_info[i].addr_locs.push_back(castI(cas_client));
+    // reg_info[i].data_sizes.push_back(sizeof(flag));
+    reg_info[i].data_sizes.push_back(4096);
+    reg_info[i].data_sizes.push_back(4096);
+    // // reg_info[i].data_sizes.push_back(REG_SZ_DATA);
+    // // reg_info[i].data_sizes.push_back(CAS_SIZE);
     reg_info[i].permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
-                               IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+      IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
     conns[i].acceptConn(addr_info, reg_info[i]);
     conn_data.push_back(conns[i].getConnData());
@@ -77,11 +86,13 @@ int main(int argc, char *argv[]) {
 
   // Create a dummy set of weights, needed for first call to runMNISTTrain():
   std::vector<torch::Tensor> w_dummy;
-  w_dummy.push_back(torch::randn({10}, torch::kFloat32)); 
+  w_dummy.push_back(torch::randn({ 10 }, torch::kFloat32));
   //std::vector<torch::Tensor> w = runMNISTTrain();
 
   std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
   for (int i = 0; i < GLOBAL_ITERS; i++) {
+    std::memset(castV(srvr_w), 0, REG_SZ_DATA);
+    std::memset(castV(reg_info[i].addr_locs[1]), 0, REG_SZ_DATA);
 
     // Store w in shared memory
     auto all_tensors = torch::cat(w).contiguous();
@@ -98,12 +109,15 @@ int main(int argc, char *argv[]) {
       Logger::instance().log(oss.str());
     }
 
-    uint64_t expected = 0;
-    if (cas_atomic->compare_exchange_strong(expected, 1)) {
-      std::cout << "CAS succeeded: value set to 1\n";
-    } else {
-        std::cout << "CAS failed: current value = " << cas_atomic->load() << "\n";
-    }
+    flag = 1;
+    //flag++;
+
+    // uint64_t expected = 0;
+    // if (cas_atomic->compare_exchange_strong(expected, 1)) {
+    //   std::cout << "CAS succeeded: value set to 1\n";
+    // } else {
+    //     std::cout << "CAS failed: current value = " << cas_atomic->load() << "\n";
+    // }
 
     // std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
 
@@ -129,7 +143,7 @@ int main(int argc, char *argv[]) {
     // } else {
     //     std::cout << "CAS failed at END: current value = " << cas_atomic->load() << "\n";
     // }
-    
+
   }
 
   std::cout << "Server done\n";

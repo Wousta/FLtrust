@@ -6,7 +6,7 @@
 
 #include <logger.hpp>
 #include <lyra/lyra.hpp>
-#include <torch/torch.h>
+//#include <torch/torch.h>
 #include <memory>
 #include <string>
 #include <thread>
@@ -15,10 +15,10 @@
 #define MSG_SZ 32
 using ltncyVec = std::vector<std::pair<int, std::chrono::nanoseconds::rep>>;
 
-int main(int argc, char *argv[]) {
-  int id = std::stoi(argv[argc -1]);
-  Logger::instance().log("Client starting execution with id: " + std::to_string(id) + "\n");
+int main(int argc, char* argv[]) {
+  Logger::instance().log("Client starting execution\n");
 
+  int id;
   std::string srvr_ip;
   std::string port;
   unsigned int posted_wqes;
@@ -27,23 +27,26 @@ int main(int argc, char *argv[]) {
   std::shared_ptr<ltncyVec> latency = std::make_shared<ltncyVec>();
   latency->reserve(10);
   auto cli = lyra::cli() |
-             lyra::opt(srvr_ip, "srvr_ip")["-i"]["--srvr_ip"]("srvr_ip") |
-             lyra::opt(port, "port")["-p"]["--port"]("port");
-  auto result = cli.parse({argc - 1, argv});
+    lyra::opt(srvr_ip, "srvr_ip")["-i"]["--srvr_ip"]("srvr_ip") |
+    lyra::opt(port, "port")["-p"]["--port"]("port") |
+    lyra::opt(id, "id")["-p"]["--id"]("id");
+  auto result = cli.parse({ argc, argv });
   if (!result) {
     std::cerr << "Error in command line: " << result.errorMessage()
-              << std::endl;
+      << std::endl;
     return 1;
   }
 
   // mr data and addr
-  std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
-  reg_info.addr_locs.push_back(castI(cas_atomic));
-  reg_info.addr_locs.push_back(castI(malloc(REG_SZ_DATA)));
-  reg_info.data_sizes.push_back(CAS_SIZE);
+  //std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
+  int flag = 0;
+  float* srvr_w = reinterpret_cast<float*> (malloc(REG_SZ_DATA));
+  reg_info.addr_locs.push_back(castI(&flag));
+  reg_info.addr_locs.push_back(castI(srvr_w));
+  reg_info.data_sizes.push_back(sizeof(flag));
   reg_info.data_sizes.push_back(REG_SZ_DATA);
   reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
-                         IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+    IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
   // addr
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
@@ -52,33 +55,45 @@ int main(int argc, char *argv[]) {
   // connect to server
   RcConn conn;
 
-  Logger::instance().log("Connecting to server W\n");
+  Logger::instance().log("Connecting to serverrrr W\n");
   int ret = conn.connect(addr_info, reg_info);
   comm_info conn_data = conn.getConnData();
 
-  LocalInfo loc_info;
-  loc_info.offs.push_back(0);  // for the first region, start at 0 of that region
-  loc_info.indices.push_back(0); // first region index (if needed)
-
   std::vector<torch::Tensor> w;
   int i = 0;
-  for(i = 0; i < GLOBAL_ITERS; i++) {
+  for (i = 0; i < GLOBAL_ITERS; i++) {
 
+    std::cout << "Client gonna read flag = " << flag << "\n";
+
+    LocalInfo flag_info;
+    flag_info.offs.push_back(0);
+    flag_info.indices.push_back(0);
+    int ret = 0;
     do {
-      (void)norm::read(conn_data, {CAS_SIZE}, {loc_info}, NetFlags(),
-                        RemoteInfo(), latency, posted_wqes);
-    } while(cas_atomic->load() != 1);
+      ret = norm::read(conn_data, { 0 }, { flag_info }, NetFlags(),
+        RemoteInfo(), latency, posted_wqes);
+    } while (flag != 1);
+
+    std::cout << "Client read ret = " << ret << "\n";
+
+    ret = norm::read(conn_data, { 0 }, { flag_info }, NetFlags(),
+      RemoteInfo(), latency, posted_wqes);
+
+    std::cout << "Client read flag TWO = " << ret << "\n";
 
     // Read the weights from the server
+    LocalInfo data_info;
+    data_info.offs.push_back(0);
+    data_info.indices.push_back(1);
+    (void)norm::read(conn_data, { REG_SZ_DATA }, { data_info }, NetFlags(),
+      RemoteInfo(), latency, posted_wqes);
+
     size_t total_bytes = reg_info.data_sizes[1];
-    size_t numel_server = total_bytes / sizeof(float);
-    
-    
-
+    size_t numel_server = REG_SZ_DATA / sizeof(float);
     // Create a tensor from the raw data (and clone it to own its memory)
-    auto updated_tensor = torch::from_blob(server_data, {static_cast<long>(numel_server)}, torch::kFloat32).clone();
+    auto updated_tensor = torch::from_blob(srvr_w, { static_cast<long>(numel_server) }, torch::kFloat32).clone();
 
-    w = {updated_tensor};
+    w = { updated_tensor };
 
     // Print the first few updated weight values from server
     {

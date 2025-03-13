@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.22.1)
 include(${CMAKE_BINARY_DIR}/conan_toolchain.cmake)
-set(CMAKE_CXX_STANDARD 20)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cache.cmake)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_COMPILER "/usr/bin/g++-12")
 
-set(Torch_DIR "/home/bustaman/libtorch/share/cmake/Torch")
-find_package(Torch REQUIRED)
+#set(Torch_DIR "/home/bustaman/libtorch/share/cmake/Torch")
+#find_package(Torch REQUIRED)
 find_package(lyra REQUIRED)
 
 add_library(mnistTrain STATIC src/mnistTrain.cpp)
@@ -22,6 +23,10 @@ target_include_directories(mnistTrain PUBLIC
 target_include_directories(srvr PUBLIC ${lyra_INCLUDE_DIRS})
 target_include_directories(clnt PUBLIC ${lyra_INCLUDE_DIRS})
 target_include_directories(srvr PUBLIC ${TORCH_INCLUDE_DIRS})
+
+target_precompile_headers(mnistTrain PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/include/pch.hpp)
+target_precompile_headers(srvr PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/include/pch.hpp)
+target_precompile_headers(clnt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/include/pch.hpp)
 
 target_link_libraries(mnistTrain PUBLIC ${TORCH_LIBRARIES})
 

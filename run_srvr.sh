@@ -1,6 +1,6 @@
 #!/bin/bash
 
-srvr_ip=127.0.0.1
+srvr_ip=192.168.117.103
 port=2000
 n_clients=1
 
@@ -31,12 +31,12 @@ echo "Redis server started on $srvr_ip:$port"
 rm -rf logs/*
 
 # Start the srvr process and capture its PID. srvr has id 0.
-build/srvr --srvr_ip $srvr_ip --port $port $n_clients &
+build/srvr --srvr_ip $srvr_ip --port $port --n_clients $n_clients &
 SRVR_PID=$!
 
 # Start the client processes and store their PIDs.
-for i in $(seq 1 $n_clients); do
-  build/clnt --srvr_ip $srvr_ip --port $port $i &
+for id in $(seq 1 $n_clients); do
+  build/clnt --srvr_ip $srvr_ip --port $port --id $id &
   CLNT_PIDS+=($!)
 done
 

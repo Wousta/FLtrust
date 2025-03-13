@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vector>
-#include <torch/torch.h>
+//#include <torch/torch.h>
 
 struct Net : torch::nn::Module {
     Net()
