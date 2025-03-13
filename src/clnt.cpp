@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) {
 
   // mr data and addr
   std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
-  reg_info.addr_locs.push_back(castI(castI(cas_atomic)));
+  reg_info.addr_locs.push_back(castI(cas_atomic));
   reg_info.addr_locs.push_back(castI(malloc(REG_SZ_DATA)));
   reg_info.data_sizes.push_back(CAS_SIZE);
   reg_info.data_sizes.push_back(REG_SZ_DATA);
@@ -58,9 +58,7 @@ int main(int argc, char *argv[]) {
 
   LocalInfo loc_info;
   loc_info.offs.push_back(0);  // for the first region, start at 0 of that region
-  loc_info.offs.push_back(0);  // for the second region, start at 0 of that region
   loc_info.indices.push_back(0); // first region index (if needed)
-  loc_info.indices.push_back(1); // second region index for data
 
   std::vector<torch::Tensor> w;
   int i = 0;
@@ -74,7 +72,8 @@ int main(int argc, char *argv[]) {
     // Read the weights from the server
     size_t total_bytes = reg_info.data_sizes[1];
     size_t numel_server = total_bytes / sizeof(float);
-    float* server_data = static_cast<float*>(castV(reg_info.addr_locs[1]));
+    
+    
 
     // Create a tensor from the raw data (and clone it to own its memory)
     auto updated_tensor = torch::from_blob(server_data, {static_cast<long>(numel_server)}, torch::kFloat32).clone();

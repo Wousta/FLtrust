@@ -46,13 +46,22 @@ int main(int argc, char *argv[]) {
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
   addr_info.port = strdup(port.c_str());
 
-  // mr data and addr
+  // stores the parameters W of the server, to be read by clients
+  float* srvr_w =  reinterpret_cast<float*> (malloc(REG_SZ_DATA));
+
+  // Flag that server modifies so clients can start reading
   std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
-  for(int i = 0; i < n_clients; i++) {
+
+  for (int i = 0; i < n_clients; i++) {
+    std::atomic<uint64_t>* cas_client = new std::atomic<uint64_t>(0);
     reg_info[i].addr_locs.push_back(castI(cas_atomic));
-    reg_info[i].addr_locs.push_back(castI(malloc(REG_SZ_DATA)));
+    reg_info[i].addr_locs.push_back(castI(srvr_w));
+    //reg_info[i].addr_locs.push_back(castI(malloc(REG_SZ_DATA)));
+    //reg_info[i].addr_locs.push_back(castI(cas_client));
     reg_info[i].data_sizes.push_back(CAS_SIZE);
     reg_info[i].data_sizes.push_back(REG_SZ_DATA);
+    // reg_info[i].data_sizes.push_back(REG_SZ_DATA);
+    // reg_info[i].data_sizes.push_back(CAS_SIZE);
     reg_info[i].permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
                                IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
@@ -72,33 +81,54 @@ int main(int argc, char *argv[]) {
   //std::vector<torch::Tensor> w = runMNISTTrain();
 
   std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
-  for(int i = 0; i < GLOBAL_ITERS; i++) {
+  for (int i = 0; i < GLOBAL_ITERS; i++) {
+
+    // Store w in shared memory
+    auto all_tensors = torch::cat(w).contiguous();
+    size_t total_bytes = all_tensors.numel() * sizeof(float);
+    std::memcpy(srvr_w, all_tensors.data_ptr<float>(), total_bytes);
+
+    std::cout << "Server wrote bytes = " << total_bytes << "\n";
+    // Print a slice of the weights
+    {
+      std::ostringstream oss;
+      oss << "Updated weights from server:" << "\n";
+      oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 10)) << " ";
+      oss << "...\n";
+      Logger::instance().log(oss.str());
+    }
 
     uint64_t expected = 0;
-    if(cas_atomic->compare_exchange_strong(expected, 1)) {
+    if (cas_atomic->compare_exchange_strong(expected, 1)) {
       std::cout << "CAS succeeded: value set to 1\n";
     } else {
         std::cout << "CAS failed: current value = " << cas_atomic->load() << "\n";
     }
 
-    std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
+    // std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
 
-    // TODO: proper synch of client sending back weights
-    //std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // int clnts_finished = 0;
+    // while (clnts_finished != n_clients) {
+    //   clnts_finished = 0;
+    //   for (int i = 0; i < n_clients; i++) {
 
-    // // Read the weights sent by the client
-    // size_t total_bytes_g = reg_info.data_sizes[1];
-    // size_t numel_server = total_bytes_g / sizeof(float);
-    // float* client_data = static_cast<float*>(castV(reg_info.addr_locs[1]));
+    //     std::atomic<uint64_t>* cas_client_ptr =  
+    //           (std::atomic<uint64_t>*) castV(reg_info[i].addr_locs[2]);
+    //     uint64_t client_cas_val = cas_client_ptr->load();
 
-    // // Create a tensor from the raw data (and clone it to own its memory)
-    // auto updated_tensor = torch::from_blob(client_data, {static_cast<long>(numel_server)}, torch::kFloat32).clone();
+    //     if (client_cas_val == 1) {
+    //       clnts_finished++;
+    //     }
 
-    // std::vector<torch::Tensor> g_client = {updated_tensor};
+    //   }
+    // }
 
-    // // For verification, print the first few updated weight values.
-    // std::cout << "Updated weights from client:" << std::endl;
-    // std::cout << g_client[0].slice(0, 0, std::min<size_t>(g_client[0].numel(), 10)) << std::endl;
+    // expected = 1;
+    // if (cas_atomic->compare_exchange_strong(expected, 0)) {
+    //   std::cout << "CAS succeeded at END: value set to 0\n";
+    // } else {
+    //     std::cout << "CAS failed at END: current value = " << cas_atomic->load() << "\n";
+    // }
     
   }
 
