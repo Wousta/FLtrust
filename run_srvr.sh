@@ -32,11 +32,18 @@ rm -rf logs/*
 
 # Start the srvr process and capture its PID. srvr has id 0.
 build/srvr --srvr_ip $srvr_ip --port $port --n_clients $n_clients &
+#valgrind --leak-check=full build/srvr --srvr_ip $srvr_ip --port $port --n_clients $n_clients &
 SRVR_PID=$!
 
 # Start the client processes and store their PIDs.
 for id in $(seq 1 $n_clients); do
   build/clnt --srvr_ip $srvr_ip --port $port --id $id &
+  # gdb -ex "break /home/bustaman/usr-rdma-api-main/examples/src/clnt.cpp:92" \
+  #     -ex "break /home/bustaman/usr-rdma-api-main/rdma-api/src/rdma-api.cpp:125" \
+  #     -ex "break /home/bustaman/usr-rdma-api-main/rdma-api/src/rdma-api.cpp:215" \
+  #     -ex "start" \
+  #     --args build/clnt --srvr_ip $srvr_ip --port $port --id $id 
+  #valgrind --leak-check=full build/clnt --srvr_ip $srvr_ip --port $port --id $id &
   CLNT_PIDS+=($!)
 done
 

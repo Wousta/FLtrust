@@ -37,13 +37,17 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  std::cout << "(CL) Client: id = " << id << "\n";
+  std::cout << "(CL) Server: srvr_ip = " << srvr_ip << "\n";
+  std::cout << "(CL) Server: port = " << port << "\n";
+
   // mr data and addr
   //std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
-  int flag = 0;
+  int* flag = new int(0);
   float* srvr_w = reinterpret_cast<float*> (malloc(REG_SZ_DATA));
-  reg_info.addr_locs.push_back(castI(&flag));
+  reg_info.addr_locs.push_back(castI(flag));
   reg_info.addr_locs.push_back(castI(srvr_w));
-  reg_info.data_sizes.push_back(sizeof(flag));
+  reg_info.data_sizes.push_back(sizeof(int));
   reg_info.data_sizes.push_back(REG_SZ_DATA);
   reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
     IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
@@ -63,20 +67,20 @@ int main(int argc, char* argv[]) {
   int i = 0;
   for (i = 0; i < GLOBAL_ITERS; i++) {
 
-    std::cout << "Client gonna read flag = " << flag << "\n";
+    std::cout << "Client gonna read flag = " << *flag << "\n";
 
     LocalInfo flag_info;
     flag_info.offs.push_back(0);
     flag_info.indices.push_back(0);
     int ret = 0;
     do {
-      ret = norm::read(conn_data, { 0 }, { flag_info }, NetFlags(),
+      ret = norm::read(conn_data, { sizeof(int) }, { flag_info }, NetFlags(),
         RemoteInfo(), latency, posted_wqes);
-    } while (flag != 1);
+    } while (*flag != 1);
 
-    std::cout << "Client read ret = " << ret << "\n";
+    std::cout << "Client read ret = " << *flag << "\n";
 
-    ret = norm::read(conn_data, { 0 }, { flag_info }, NetFlags(),
+    ret = norm::read(conn_data, { sizeof(int) }, { flag_info }, NetFlags(),
       RemoteInfo(), latency, posted_wqes);
 
     std::cout << "Client read flag TWO = " << ret << "\n";
@@ -86,9 +90,8 @@ int main(int argc, char* argv[]) {
     data_info.offs.push_back(0);
     data_info.indices.push_back(1);
     (void)norm::read(conn_data, { REG_SZ_DATA }, { data_info }, NetFlags(),
-      RemoteInfo(), latency, posted_wqes);
+                    RemoteInfo(), latency, posted_wqes);
 
-    size_t total_bytes = reg_info.data_sizes[1];
     size_t numel_server = REG_SZ_DATA / sizeof(float);
     // Create a tensor from the raw data (and clone it to own its memory)
     auto updated_tensor = torch::from_blob(srvr_w, { static_cast<long>(numel_server) }, torch::kFloat32).clone();
@@ -133,6 +136,9 @@ int main(int argc, char* argv[]) {
     Logger::instance().log("Client: Done with iteration\n");
 
   }
+
+  delete flag;
+  free(srvr_w);
 
   std::cout << "Client done iters: " << i << "\n";
 

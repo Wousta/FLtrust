@@ -5,8 +5,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_COMPILER "/usr/bin/g++-12")
 
-#set(Torch_DIR "/home/bustaman/libtorch/share/cmake/Torch")
-#find_package(Torch REQUIRED)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  message(STATUS "Enabling AddressSanitizer flags...")
+  add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
+  add_link_options(-fsanitize=address -fno-omit-frame-pointer -g)
+endif()
+
 find_package(lyra REQUIRED)
 
 add_library(mnistTrain STATIC src/mnistTrain.cpp)

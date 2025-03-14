@@ -20,14 +20,14 @@ using ltncyVec = std::vector<std::pair<int, std::chrono::nanoseconds::rep>>;
 int main(int argc, char* argv[]) {
   Logger::instance().log("Server starting execution\n");
   int n_clients;
-  
+
   std::string srvr_ip;
   std::string port;
   unsigned int posted_wqes;
   AddrInfo addr_info;
   auto cli = lyra::cli() |
     lyra::opt(srvr_ip, "srvr_ip")["-i"]["--srvr_ip"]("srvr_ip") |
-    lyra::opt(port, "port")["-p"]["--port"]("port") | 
+    lyra::opt(port, "port")["-p"]["--port"]("port") |
     lyra::opt(n_clients, "n_clients")["-w"]["--n_clients"]("n_clients");
   auto result = cli.parse({ argc, argv });
   if (!result) {
@@ -45,7 +45,6 @@ int main(int argc, char* argv[]) {
   std::vector<comm_info> conn_data;
   std::vector<LocalInfo> loc_info(n_clients);
   std::shared_ptr<ltncyVec> latency = std::make_shared<ltncyVec>();
-
   latency->reserve(10);
 
   // addr
@@ -54,22 +53,21 @@ int main(int argc, char* argv[]) {
 
   // stores the parameters W of the server, to be read by clients
   float* srvr_w = reinterpret_cast<float*> (malloc(REG_SZ_DATA));
+  int* flag = new int(0);
 
   // Flag that server modifies so clients can start reading
   //std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
-  int flag = 0;
   for (int i = 0; i < n_clients; i++) {
     std::atomic<uint64_t>* cas_client = new std::atomic<uint64_t>(0);
-    reg_info[i].addr_locs.push_back(castI(malloc(4096)));
-    reg_info[i].addr_locs.push_back(castI(malloc(4096)));
-    // reg_info[i].addr_locs.push_back(castI(&flag));
-    // reg_info[i].addr_locs.push_back(castI(srvr_w));
-    // //reg_info[i].addr_locs.push_back(castI(malloc(REG_SZ_DATA)));
-    // //reg_info[i].addr_locs.push_back(castI(cas_client));
-    // reg_info[i].data_sizes.push_back(sizeof(flag));
-    reg_info[i].data_sizes.push_back(4096);
-    reg_info[i].data_sizes.push_back(4096);
-    // // reg_info[i].data_sizes.push_back(REG_SZ_DATA);
+    // reg_info[i].addr_locs.push_back(castI(malloc(4096)));
+    // reg_info[i].addr_locs.push_back(castI(malloc(4096)));
+    reg_info[i].addr_locs.push_back(castI(flag));
+    reg_info[i].addr_locs.push_back(castI(srvr_w));
+
+    reg_info[i].data_sizes.push_back(sizeof(int));
+    reg_info[i].data_sizes.push_back(REG_SZ_DATA);
+    // reg_info[i].data_sizes.push_back(4096);
+    // reg_info[i].data_sizes.push_back(4096);
     // // reg_info[i].data_sizes.push_back(CAS_SIZE);
     reg_info[i].permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
       IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
@@ -86,20 +84,19 @@ int main(int argc, char* argv[]) {
 
   // Create a dummy set of weights, needed for first call to runMNISTTrain():
   std::vector<torch::Tensor> w_dummy;
-  w_dummy.push_back(torch::randn({ 10 }, torch::kFloat32));
+  w_dummy.push_back(torch::arange(0, 10, torch::kFloat32));
   //std::vector<torch::Tensor> w = runMNISTTrain();
 
   std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
   for (int i = 0; i < GLOBAL_ITERS; i++) {
     std::memset(castV(srvr_w), 0, REG_SZ_DATA);
-    std::memset(castV(reg_info[i].addr_locs[1]), 0, REG_SZ_DATA);
 
     // Store w in shared memory
     auto all_tensors = torch::cat(w).contiguous();
     size_t total_bytes = all_tensors.numel() * sizeof(float);
     std::memcpy(srvr_w, all_tensors.data_ptr<float>(), total_bytes);
 
-    std::cout << "Server wrote bytes = " << total_bytes << "\n";
+    //std::cout << "Server wrote bytes = " << total_bytes << "\n";
     // Print a slice of the weights
     {
       std::ostringstream oss;
@@ -109,7 +106,7 @@ int main(int argc, char* argv[]) {
       Logger::instance().log(oss.str());
     }
 
-    flag = 1;
+    *flag = 1;
     //flag++;
 
     // uint64_t expected = 0;
