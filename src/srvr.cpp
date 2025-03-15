@@ -84,7 +84,7 @@ int main(int argc, char* argv[]) {
   //std::vector<torch::Tensor> w = runMNISTTrain();
 
   std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
-  for (int round = 1; round < GLOBAL_ITERS; round++) {
+  for (int round = 1; round <= GLOBAL_ITERS; round++) {
 
     // Store w in shared memory
     auto all_tensors = torch::cat(w).contiguous();
