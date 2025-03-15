@@ -45,10 +45,10 @@ int main(int argc, char* argv[]) {
   //std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
   int* flag = new int(0);
   float* srvr_w = reinterpret_cast<float*> (malloc(REG_SZ_DATA));
-  reg_info.addr_locs.push_back(castI(flag));
-  reg_info.addr_locs.push_back(castI(srvr_w));
-  reg_info.data_sizes.push_back(sizeof(int));
-  reg_info.data_sizes.push_back(REG_SZ_DATA);
+  reg_info.addr_locs.push_back(castI(malloc(MIN_SZ_DATA)));
+  reg_info.addr_locs.push_back(castI(malloc(MIN_SZ_DATA)));
+  reg_info.data_sizes.push_back(MIN_SZ_DATA);
+  reg_info.data_sizes.push_back(MIN_SZ_DATA);
   reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
     IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
@@ -63,7 +63,14 @@ int main(int argc, char* argv[]) {
   int ret = conn.connect(addr_info, reg_info);
   comm_info conn_data = conn.getConnData();
 
-  std::vector<torch::Tensor> w;
+
+
+  std::string msg = "Hailo parld!";
+
+
+  std::vector<torch::Tensor> w_dummy;
+  w_dummy.push_back(torch::arange(2, 12, torch::kFloat32));
+  std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
   int i = 0;
   for (i = 0; i < GLOBAL_ITERS; i++) {
 
@@ -76,6 +83,8 @@ int main(int argc, char* argv[]) {
     do {
       ret = norm::read(conn_data, { sizeof(int) }, { flag_info }, NetFlags(),
         RemoteInfo(), latency, posted_wqes);
+
+      std::memcpy(flag, castV(reg_info.addr_locs[0]), sizeof(int));
     } while (*flag != 1);
 
     std::cout << "Client read ret = " << *flag << "\n";
@@ -83,32 +92,45 @@ int main(int argc, char* argv[]) {
     ret = norm::read(conn_data, { sizeof(int) }, { flag_info }, NetFlags(),
       RemoteInfo(), latency, posted_wqes);
 
-    std::cout << "Client read flag TWO = " << ret << "\n";
+    std::cout << "Client read flag TWO = " << *flag << "\n";
 
-    // Read the weights from the server
+
+    // Read the msg from the server
     LocalInfo data_info;
     data_info.offs.push_back(0);
     data_info.indices.push_back(1);
-    (void)norm::read(conn_data, { REG_SZ_DATA }, { data_info }, NetFlags(),
+    (void)norm::read(conn_data, { msg.length() }, { data_info }, NetFlags(),
                     RemoteInfo(), latency, posted_wqes);
 
-    size_t numel_server = REG_SZ_DATA / sizeof(float);
-    // Create a tensor from the raw data (and clone it to own its memory)
-    auto updated_tensor = torch::from_blob(srvr_w, { static_cast<long>(numel_server) }, torch::kFloat32).clone();
+    msg.clear();
+    msg.resize(MSG_SZ);
+    std::memcpy(msg.data(), castV(reg_info.addr_locs[1]), msg.length());
+    std::cout << "Client read msg = " << msg << "\n";
 
-    w = { updated_tensor };
+    // // Read the weights from the server
+    // LocalInfo data_info;
+    // data_info.offs.push_back(0);
+    // data_info.indices.push_back(1);
+    // (void)norm::read(conn_data, { REG_SZ_DATA }, { data_info }, NetFlags(),
+    //                 RemoteInfo(), latency, posted_wqes);
 
-    // Print the first few updated weight values from server
-    {
-      std::ostringstream oss;
-      oss << "Number of elements in updated tensor: " << updated_tensor.numel() << "\n";
-      oss << "Updated weights from server:" << "\n";
-      oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 10)) << "\n";
-      Logger::instance().log(oss.str());
-    }
+    // size_t numel_server = REG_SZ_DATA / sizeof(float);
+    // // Create a tensor from the raw data (and clone it to own its memory)
+    // auto updated_tensor = torch::from_blob(srvr_w, { static_cast<long>(numel_server) }, torch::kFloat32).clone();
 
-    // Run the training on the updated weights
-    std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
+    // w = { updated_tensor };
+
+    // // Print the first few updated weight values from server
+    // {
+    //   std::ostringstream oss;
+    //   oss << "Number of elements in updated tensor: " << updated_tensor.numel() << "\n";
+    //   oss << "Updated weights from server:" << "\n";
+    //   oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 10)) << "\n";
+    //   Logger::instance().log(oss.str());
+    // }
+
+    // // Run the training on the updated weights
+    // std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
 
     // // Send the updated weights back to the server
     // auto g_flat = torch::cat(g).contiguous();

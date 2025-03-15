@@ -59,28 +59,20 @@ int main(int argc, char* argv[]) {
   //std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
   for (int i = 0; i < n_clients; i++) {
     std::atomic<uint64_t>* cas_client = new std::atomic<uint64_t>(0);
-    // reg_info[i].addr_locs.push_back(castI(malloc(4096)));
-    // reg_info[i].addr_locs.push_back(castI(malloc(4096)));
-    reg_info[i].addr_locs.push_back(castI(flag));
-    reg_info[i].addr_locs.push_back(castI(srvr_w));
+    reg_info[i].addr_locs.push_back(castI(malloc(MIN_SZ_DATA)));
+    reg_info[i].addr_locs.push_back(castI(malloc(MIN_SZ_DATA)));
 
-    reg_info[i].data_sizes.push_back(sizeof(int));
-    reg_info[i].data_sizes.push_back(REG_SZ_DATA);
-    // reg_info[i].data_sizes.push_back(4096);
-    // reg_info[i].data_sizes.push_back(4096);
-    // // reg_info[i].data_sizes.push_back(CAS_SIZE);
+    reg_info[i].data_sizes.push_back(MIN_SZ_DATA);
+    reg_info[i].data_sizes.push_back(MIN_SZ_DATA);
     reg_info[i].permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
       IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
     conns[i].acceptConn(addr_info, reg_info[i]);
     conn_data.push_back(conns[i].getConnData());
 
-    loc_info[i].offs.push_back(0);
-    loc_info[i].offs.push_back(0);
-    loc_info[i].indices.push_back(0);
-    loc_info[i].indices.push_back(1);
   }
 
+  std::string msg = "Hello World!";
 
   // Create a dummy set of weights, needed for first call to runMNISTTrain():
   std::vector<torch::Tensor> w_dummy;
@@ -89,24 +81,27 @@ int main(int argc, char* argv[]) {
 
   std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
   for (int i = 0; i < GLOBAL_ITERS; i++) {
-    std::memset(castV(srvr_w), 0, REG_SZ_DATA);
 
     // Store w in shared memory
-    auto all_tensors = torch::cat(w).contiguous();
-    size_t total_bytes = all_tensors.numel() * sizeof(float);
-    std::memcpy(srvr_w, all_tensors.data_ptr<float>(), total_bytes);
+    // auto all_tensors = torch::cat(w).contiguous();
+    // size_t total_bytes = all_tensors.numel() * sizeof(float);
+    // std::memcpy(srvr_w, all_tensors.data_ptr<float>(), total_bytes);
+
+    std::memcpy(castV(reg_info[0].addr_locs[1]), msg.data(), msg.length());
+    std::cout << "Server wrote msg = " << msg << "\n";  
 
     //std::cout << "Server wrote bytes = " << total_bytes << "\n";
     // Print a slice of the weights
-    {
-      std::ostringstream oss;
-      oss << "Updated weights from server:" << "\n";
-      oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 10)) << " ";
-      oss << "...\n";
-      Logger::instance().log(oss.str());
-    }
+    // {
+    //   std::ostringstream oss;
+    //   oss << "Updated weights from server:" << "\n";
+    //   oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 10)) << " ";
+    //   oss << "...\n";
+    //   Logger::instance().log(oss.str());
+    // }
 
     *flag = 1;
+    std::memcpy(castV(reg_info[0].addr_locs[0]), flag, sizeof(int));
     //flag++;
 
     // uint64_t expected = 0;
