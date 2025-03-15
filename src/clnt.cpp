@@ -6,7 +6,6 @@
 
 #include <logger.hpp>
 #include <lyra/lyra.hpp>
-//#include <torch/torch.h>
 #include <memory>
 #include <string>
 #include <thread>
@@ -14,6 +13,10 @@
 
 #define MSG_SZ 32
 using ltncyVec = std::vector<std::pair<int, std::chrono::nanoseconds::rep>>;
+
+int exec_rdma_op(int loc_info_idx, int rem_info_idx, uint64_t size, int op_type) {
+  return 0;
+}
 
 int main(int argc, char* argv[]) {
   Logger::instance().log("Client starting execution\n");
@@ -37,132 +40,109 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  std::cout << "(CL) Client: id = " << id << "\n";
-  std::cout << "(CL) Server: srvr_ip = " << srvr_ip << "\n";
-  std::cout << "(CL) Server: port = " << port << "\n";
-
-  // mr data and addr
-  //std::atomic<uint64_t>* cas_atomic = new std::atomic<uint64_t>(0);
-  int* flag = new int(0);
-  float* srvr_w = reinterpret_cast<float*> (malloc(REG_SZ_DATA));
-  reg_info.addr_locs.push_back(castI(malloc(MIN_SZ_DATA)));
-  reg_info.addr_locs.push_back(castI(malloc(MIN_SZ_DATA)));
-  reg_info.data_sizes.push_back(MIN_SZ_DATA);
-  reg_info.data_sizes.push_back(MIN_SZ_DATA);
-  reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
-    IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
-
   // addr
+  Logger::instance().log("Client: id = " + std::to_string(id) + "\n");
+  Logger::instance().log("Client: srvr_ip = " + srvr_ip + "\n");
+  Logger::instance().log("Client: port = " + port + "\n");
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
   addr_info.port = strdup(port.c_str());
 
-  // connect to server
-  RcConn conn;
+  // Data structures for server and this client
+  int srvr_ready_flag = 0;
+  float* srvr_w = reinterpret_cast<float*> (malloc(REG_SZ_DATA));
+  int clnt_ready_flag = 0;
+  float* clnt_w = reinterpret_cast<float*> (malloc(REG_SZ_DATA));
 
-  Logger::instance().log("Connecting to serverrrr W\n");
+  // memory registration
+  reg_info.addr_locs.push_back(castI(&srvr_ready_flag));
+  reg_info.addr_locs.push_back(castI(srvr_w));
+  reg_info.addr_locs.push_back(castI(&clnt_ready_flag));
+  reg_info.addr_locs.push_back(castI(srvr_w));
+  reg_info.data_sizes.push_back(MIN_SZ);
+  reg_info.data_sizes.push_back(REG_SZ_DATA);
+  reg_info.data_sizes.push_back(MIN_SZ);
+  reg_info.data_sizes.push_back(REG_SZ_DATA);
+  reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
+    IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+
+  // connect to server
+  Logger::instance().log("Connecting to server\n");
+  RcConn conn;
   int ret = conn.connect(addr_info, reg_info);
   comm_info conn_data = conn.getConnData();
 
-
-
-  std::string msg = "Hailo parld!";
-
-
-  std::vector<torch::Tensor> w_dummy;
-  w_dummy.push_back(torch::arange(2, 12, torch::kFloat32));
-  std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
-  int i = 0;
-  for (i = 0; i < GLOBAL_ITERS; i++) {
-
-    std::cout << "Client gonna read flag = " << *flag << "\n";
+  std::vector<torch::Tensor> w;
+  for (int round = 1; round <= GLOBAL_ITERS; round++) {
 
     LocalInfo flag_info;
-    flag_info.offs.push_back(0);
-    flag_info.indices.push_back(0);
-    int ret = 0;
+    flag_info.indices.push_back(SRVR_READY_IDX);
     do {
-      ret = norm::read(conn_data, { sizeof(int) }, { flag_info }, NetFlags(),
+      norm::read(conn_data, { sizeof(int) }, { flag_info }, NetFlags(),
         RemoteInfo(), latency, posted_wqes);
+    } while (srvr_ready_flag != SRVR_READ_READY);
 
-      std::memcpy(flag, castV(reg_info.addr_locs[0]), sizeof(int));
-    } while (*flag != 1);
+    std::cout << "Client read flag = " << srvr_ready_flag << "\n";
 
-    std::cout << "Client read ret = " << *flag << "\n";
+    // Read the weights from the server
+    LocalInfo local_srvr_data;
+    local_srvr_data.indices.push_back(SRVR_W_IDX);
+    RemoteInfo remote_srvr_info;
+    remote_srvr_info.indx = SRVR_W_IDX;
+    (void)norm::read(conn_data, { REG_SZ_DATA }, { local_srvr_data }, NetFlags(),
+                    remote_srvr_info, latency, posted_wqes);
 
-    ret = norm::read(conn_data, { sizeof(int) }, { flag_info }, NetFlags(),
-      RemoteInfo(), latency, posted_wqes);
+    size_t numel_server = REG_SZ_DATA / sizeof(float);
+    auto updated_tensor = torch::from_blob(srvr_w, { static_cast<long>(numel_server) }, torch::kFloat32).clone();
+    w = { updated_tensor };
 
-    std::cout << "Client read flag TWO = " << *flag << "\n";
+    // Print the first few updated weight values from server
+    {
+      std::ostringstream oss;
+      oss << "Number of elements in updated tensor: " << updated_tensor.numel() << "\n";
+      oss << "Updated weights from server:" << "\n";
+      oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 12)) << "\n";
+      Logger::instance().log(oss.str());
+    }
 
+    // Run the training on the updated weights
+    std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
 
-    // Read the msg from the server
-    LocalInfo data_info;
-    data_info.offs.push_back(0);
-    data_info.indices.push_back(1);
-    (void)norm::read(conn_data, { msg.length() }, { data_info }, NetFlags(),
-                    RemoteInfo(), latency, posted_wqes);
+    // Send the updated weights back to the server
+    auto g_flat = torch::cat(g).contiguous();
+    size_t total_bytes_g = g_flat.numel() * sizeof(float);
+    float* raw_ptr_g = g_flat.data_ptr<float>();
+    std::memcpy(castV(reg_info.addr_locs[CLNT_W_IDX]), raw_ptr_g, total_bytes_g);
 
-    msg.clear();
-    msg.resize(MSG_SZ);
-    std::memcpy(msg.data(), castV(reg_info.addr_locs[1]), msg.length());
-    std::cout << "Client read msg = " << msg << "\n";
+    LocalInfo local_clnt_data;
+    local_clnt_data.indices.push_back(CLNT_W_IDX);
+    RemoteInfo remote_clnt_info;
+    remote_clnt_info.indx = CLNT_W_IDX;
+    unsigned int total_bytes_g_int = static_cast<unsigned int>(total_bytes_g);
+    (void)norm::write(conn_data, {total_bytes_g_int}, {local_clnt_data}, NetFlags(),
+                      remote_clnt_info, latency, posted_wqes);
 
-    // // Read the weights from the server
-    // LocalInfo data_info;
-    // data_info.offs.push_back(0);
-    // data_info.indices.push_back(1);
-    // (void)norm::read(conn_data, { REG_SZ_DATA }, { data_info }, NetFlags(),
-    //                 RemoteInfo(), latency, posted_wqes);
+    // Print the first few updated weights sent by client
+    {
+      std::ostringstream oss;
+      oss << "Updated weights sent by client:" << "\n";
+      oss << g_flat.slice(0, 0, std::min<size_t>(g_flat.numel(), 10)) << "\n";
+      Logger::instance().log(oss.str());
+    }
 
-    // size_t numel_server = REG_SZ_DATA / sizeof(float);
-    // // Create a tensor from the raw data (and clone it to own its memory)
-    // auto updated_tensor = torch::from_blob(srvr_w, { static_cast<long>(numel_server) }, torch::kFloat32).clone();
-
-    // w = { updated_tensor };
-
-    // // Print the first few updated weight values from server
-    // {
-    //   std::ostringstream oss;
-    //   oss << "Number of elements in updated tensor: " << updated_tensor.numel() << "\n";
-    //   oss << "Updated weights from server:" << "\n";
-    //   oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 10)) << "\n";
-    //   Logger::instance().log(oss.str());
-    // }
-
-    // // Run the training on the updated weights
-    // std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
-
-    // // Send the updated weights back to the server
-    // auto g_flat = torch::cat(g).contiguous();
-    // size_t total_bytes_g = g_flat.numel() * sizeof(float);
-    // float* raw_ptr_g = g_flat.data_ptr<float>();
-
-    // // 1- copy data to write in your local memory
-    // std::memcpy(castV(reg_info.addr_locs[1]), raw_ptr_g, total_bytes_g);
-
-    // // 2- write msg to remote side
-    // Logger::instance().log("writing msg ...\n");
-
-    // // Print the first few updated weights sent by client
-    // {
-    //   std::ostringstream oss;
-    //   oss << "Updated weights sent by client:" << "\n";
-    //   oss << g_flat.slice(0, 0, std::min<size_t>(g_flat.numel(), 10)) << "\n";
-    //   Logger::instance().log(oss.str());
-    // }
-
-    // unsigned int total_bytes_g_int = static_cast<unsigned int>(total_bytes_g);
-    // (void)norm::write(conn_data, {total_bytes_g_int}, {loc_info}, NetFlags(),
-    //                   RemoteInfo(), latency, posted_wqes);
+    // Update the ready flag
+    clnt_ready_flag = CLNT_READ_READY;
+    LocalInfo local_clnt_flag;
+    local_clnt_flag.indices.push_back(CLNT_READY_IDX);
+    RemoteInfo remote_clnt_flag;
+    remote_clnt_flag.indx = CLNT_READY_IDX;
+    (void)norm::write(conn_data, {sizeof(int)}, {local_clnt_flag}, NetFlags(),
+                      remote_clnt_flag, latency, posted_wqes);
 
     Logger::instance().log("Client: Done with iteration\n");
 
   }
 
-  delete flag;
-  free(srvr_w);
-
-  std::cout << "Client done iters: " << i << "\n";
+  std::cout << "Client done\n";
 
   return 0;
 }
