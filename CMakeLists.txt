@@ -14,6 +14,7 @@ endif()
 find_package(lyra REQUIRED)
 
 add_library(mnistTrain STATIC src/mnistTrain.cpp)
+add_library(rdmaOps STATIC src/rdmaOps.cpp)
 add_executable(srvr src/srvr.cpp)
 add_executable(clnt src/clnt.cpp)
 
@@ -24,6 +25,11 @@ target_include_directories(mnistTrain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src/include 
   ${TORCH_INCLUDE_DIRS}
 )
+
+target_include_directories(rdmaOps PUBLIC 
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/include 
+)
+
 target_include_directories(srvr PUBLIC ${lyra_INCLUDE_DIRS})
 target_include_directories(clnt PUBLIC ${lyra_INCLUDE_DIRS})
 target_include_directories(srvr PUBLIC ${TORCH_INCLUDE_DIRS})
@@ -39,6 +45,7 @@ target_link_libraries(srvr PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../rdma-api/build/libnorm.so
   ${TORCH_LIBRARIES}
   mnistTrain  
+  rdmaOps
 )
 
 target_link_libraries(clnt PUBLIC 
@@ -46,4 +53,5 @@ target_link_libraries(clnt PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../rdma-api/build/libnorm.so
   ${TORCH_LIBRARIES}
   mnistTrain
+  rdmaOps
 )

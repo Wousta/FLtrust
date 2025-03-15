@@ -3,6 +3,7 @@
 #include "../../shared/util.hpp"
 #include "include/mnistTrain.hpp"
 #include "include/globalConstants.hpp"
+#include "include/rdmaOps.hpp"
 
 #include <logger.hpp>
 #include <lyra/lyra.hpp>
@@ -70,26 +71,19 @@ int main(int argc, char* argv[]) {
   RcConn conn;
   int ret = conn.connect(addr_info, reg_info);
   comm_info conn_data = conn.getConnData();
+  RdmaOps rdma_ops(conn_data);
 
   std::vector<torch::Tensor> w;
   for (int round = 1; round <= GLOBAL_ITERS; round++) {
 
-    LocalInfo flag_info;
-    flag_info.indices.push_back(SRVR_READY_IDX);
     do {
-      norm::read(conn_data, { sizeof(int) }, { flag_info }, NetFlags(),
-        RemoteInfo(), latency, posted_wqes);
-    } while (srvr_ready_flag != SRVR_READ_READY);
+      rdma_ops.exec_rdma_read(sizeof(int), SRVR_READY_IDX);
+    } while (srvr_ready_flag != round);
 
     std::cout << "Client read flag = " << srvr_ready_flag << "\n";
 
     // Read the weights from the server
-    LocalInfo local_srvr_data;
-    local_srvr_data.indices.push_back(SRVR_W_IDX);
-    RemoteInfo remote_srvr_info;
-    remote_srvr_info.indx = SRVR_W_IDX;
-    (void)norm::read(conn_data, { REG_SZ_DATA }, { local_srvr_data }, NetFlags(),
-                    remote_srvr_info, latency, posted_wqes);
+    rdma_ops.exec_rdma_read(REG_SZ_DATA, SRVR_W_IDX);
 
     size_t numel_server = REG_SZ_DATA / sizeof(float);
     auto updated_tensor = torch::from_blob(srvr_w, { static_cast<long>(numel_server) }, torch::kFloat32).clone();
@@ -112,14 +106,8 @@ int main(int argc, char* argv[]) {
     size_t total_bytes_g = g_flat.numel() * sizeof(float);
     float* raw_ptr_g = g_flat.data_ptr<float>();
     std::memcpy(castV(reg_info.addr_locs[CLNT_W_IDX]), raw_ptr_g, total_bytes_g);
-
-    LocalInfo local_clnt_data;
-    local_clnt_data.indices.push_back(CLNT_W_IDX);
-    RemoteInfo remote_clnt_info;
-    remote_clnt_info.indx = CLNT_W_IDX;
     unsigned int total_bytes_g_int = static_cast<unsigned int>(total_bytes_g);
-    (void)norm::write(conn_data, {total_bytes_g_int}, {local_clnt_data}, NetFlags(),
-                      remote_clnt_info, latency, posted_wqes);
+    rdma_ops.exec_rdma_write(total_bytes_g_int, CLNT_W_IDX);
 
     // Print the first few updated weights sent by client
     {
@@ -130,17 +118,18 @@ int main(int argc, char* argv[]) {
     }
 
     // Update the ready flag
-    clnt_ready_flag = CLNT_READ_READY;
-    LocalInfo local_clnt_flag;
-    local_clnt_flag.indices.push_back(CLNT_READY_IDX);
-    RemoteInfo remote_clnt_flag;
-    remote_clnt_flag.indx = CLNT_READY_IDX;
-    (void)norm::write(conn_data, {sizeof(int)}, {local_clnt_flag}, NetFlags(),
-                      remote_clnt_flag, latency, posted_wqes);
+    clnt_ready_flag = round;
+    rdma_ops.exec_rdma_write(sizeof(int), CLNT_READY_IDX);
 
     Logger::instance().log("Client: Done with iteration\n");
 
   }
+
+  free(srvr_w);
+  free(clnt_w);
+  free(addr_info.ipv4_addr);
+  free(addr_info.port);
+  conn.disconnect();
 
   std::cout << "Client done\n";
 

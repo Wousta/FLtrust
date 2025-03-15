@@ -18,6 +18,3 @@ inline constexpr int SRVR_W_IDX = 1;
 inline constexpr int CLNT_READY_IDX = 2;
 inline constexpr int CLNT_W_IDX = 3;
 
-// Operation codes
-inline constexpr int OP_READ = 0;
-inline constexpr int OP_WRITE = 1;

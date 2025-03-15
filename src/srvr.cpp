@@ -3,6 +3,7 @@
 #include "../../shared/util.hpp"
 #include "include/mnistTrain.hpp"
 #include "include/globalConstants.hpp"
+#include "include/rdmaOps.hpp"
 #include <logger.hpp>
 
 #include <chrono>
@@ -101,7 +102,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Set the flag to indicate that the weights are ready for the clients to read
-    srvr_ready_flag = SRVR_READ_READY;
+    srvr_ready_flag = round;
 
     // Run local training
     std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
@@ -109,11 +110,10 @@ int main(int argc, char* argv[]) {
     // Read the gradients from the clients
     int clnt_idx = 0;
     while (clnt_idx != n_clients) {
-      if(clnt_ready_flags[clnt_idx] == CLNT_READ_READY) {
+      if(clnt_ready_flags[clnt_idx] == round) {
         auto g_flat = torch::cat(g).contiguous();
         size_t total_bytes_g = g_flat.numel() * sizeof(float);
         std::memcpy(clnt_ws[clnt_idx], g_flat.data_ptr<float>(), total_bytes_g);
-        clnt_ready_flags[clnt_idx] = CLNT_READ_READY;
         clnt_idx++;
       }
     }
@@ -129,10 +129,15 @@ int main(int argc, char* argv[]) {
       Logger::instance().log(oss.str());
     }
 
-    // Reset srvr_ready_flag for next iteration
-    srvr_ready_flag = SRVR_READ_WAIT;
-
   }
+
+  // free memory
+  free(srvr_w);
+  for (int i = 0; i < n_clients; i++) {
+    free(clnt_ws[i]);
+  }
+  free(addr_info.ipv4_addr);
+  free(addr_info.port);
 
   std::cout << "Server done\n";
 
