@@ -3,6 +3,7 @@
 #include "../../shared/util.hpp"
 #include "include/mnistTrain.hpp"
 #include "include/globalConstants.hpp"
+#include "include/rdmaOps.hpp"
 #include <logger.hpp>
 
 #include <chrono>
@@ -13,102 +14,130 @@
 #include <thread>
 //#include <torch/torch.h>
 
-#define MSG_SZ 32
+#define MSG_SZ 322
 using ltncyVec = std::vector<std::pair<int, std::chrono::nanoseconds::rep>>;
 
-int main(int argc, char *argv[]) {
-  Logger::instance().log("Server starting execution...");
 
+int main(int argc, char* argv[]) {
+  Logger::instance().log("Server starting execution\n");
+  int n_clients;
+  
   std::string srvr_ip;
   std::string port;
   unsigned int posted_wqes;
   AddrInfo addr_info;
-  RegInfo reg_info;
   std::shared_ptr<ltncyVec> latency = std::make_shared<ltncyVec>();
   latency->reserve(10);
   auto cli = lyra::cli() |
-             lyra::opt(srvr_ip, "srvr_ip")["-i"]["--srvr_ip"]("srvr_ip") |
-             lyra::opt(port, "port")["-p"]["--port"]("port");
-  auto result = cli.parse({argc, argv});
+    lyra::opt(srvr_ip, "srvr_ip")["-i"]["--srvr_ip"]("srvr_ip") |
+    lyra::opt(port, "port")["-p"]["--port"]("port") | 
+    lyra::opt(n_clients, "n_clients")["-w"]["--n_clients"]("n_clients");
+  auto result = cli.parse({ argc, argv });
   if (!result) {
     std::cerr << "Error in command line: " << result.errorMessage()
-              << std::endl;
+      << std::endl;
     return 1;
   }
 
-  // mr data and addr
-  uint64_t reg_sz = 4096;
-  reg_info.addr_locs.push_back(castI(malloc(reg_sz)));
-  reg_info.data_sizes.push_back(reg_sz);
-  reg_info.permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
-                         IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
   // addr
   addr_info.ipv4_addr = strdup(srvr_ip.c_str());
   addr_info.port = strdup(port.c_str());
+  std::cout << "Server: n_clients = " << n_clients << "\n";
+  std::cout << "Server: srvr_ip = " << srvr_ip << "\n";
+  std::cout << "Server: port = " << port << "\n";
 
-  
-  std::array<int, 3> w = {0, 0, 0};
-  for(int i = 0; i < GLOBAL_ITERS; i++) {
+  std::vector<RegInfo> reg_info(n_clients);
+  std::vector<RcConn> conns(n_clients);
+  std::vector<comm_info> conn_data;
+  std::vector<LocalInfo> loc_info(n_clients);
 
-    // accept client conn requests and extract info
-    RcConn conn;
-    int ret = conn.acceptConn(addr_info, reg_info);
-    comm_info conn_data = conn.getConnData();
+  // Data structures for server and clients
+  int srvr_ready_flag = 0;
+  float* srvr_w = reinterpret_cast<float*> (malloc(REG_SZ_DATA));
+  std::vector<int> clnt_ready_flags(n_clients, 0);
+  std::vector<float*> clnt_ws(n_clients);
+  for (int i = 0; i < n_clients; i++) {
+    clnt_ws[i] = reinterpret_cast<float*> (malloc(REG_SZ_DATA));
+  }
 
-    // 1- copy data to write in your local memory
-    std::memcpy(castV(reg_info.addr_locs.front()), w.data(), w.size() * sizeof(int));
+  // memory registration
+  for (int i = 0; i < n_clients; i++) {
+    reg_info[i].addr_locs.push_back(castI(&srvr_ready_flag));           
+    reg_info[i].addr_locs.push_back(castI(srvr_w));
+    reg_info[i].addr_locs.push_back(castI(&clnt_ready_flags[i]));
+    reg_info[i].addr_locs.push_back(castI(clnt_ws[i]));
+    reg_info[i].data_sizes.push_back(MIN_SZ);
+    reg_info[i].data_sizes.push_back(REG_SZ_DATA);
+    reg_info[i].data_sizes.push_back(MIN_SZ);
+    reg_info[i].data_sizes.push_back(REG_SZ_DATA);
+    // // reg_info[i].data_sizes.push_back(CAS_SIZE);
+    reg_info[i].permissions = IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE |
+      IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
-    // 2- write msg to remote side
-    Logger::instance().log("writing msg ...\n");
+    // connect to clients
+    conns[i].acceptConn(addr_info, reg_info[i]);
+    conn_data.push_back(conns[i].getConnData());
+  }
 
-    (void)norm::write(conn_data, {w.size() * sizeof(int)}, {LocalInfo()}, NetFlags(),
-                      RemoteInfo(), latency, posted_wqes);
+  // Create a dummy set of weights, needed for first call to runMNISTTrain():
+  std::vector<torch::Tensor> w_dummy;
+  w_dummy.push_back(torch::arange(0, 10, torch::kFloat32));
+  //std::vector<torch::Tensor> w = runMNISTTrain();
 
-    Logger::instance().log("  msg wrote = ");
-    for(const auto& i : w) {
-      Logger::instance().log(std::to_string(i) + " ");
+  std::vector<torch::Tensor> w = runMNISTTrainDummy(w_dummy);
+  for (int round = 1; round <= GLOBAL_ITERS; round++) {
+
+    // Store w in shared memory
+    auto all_tensors = torch::cat(w).contiguous();
+    size_t total_bytes = all_tensors.numel() * sizeof(float);
+    std::memcpy(srvr_w, all_tensors.data_ptr<float>(), total_bytes);
+
+    std::cout << "Server wrote bytes = " << total_bytes << "\n";
+    {
+      std::ostringstream oss;
+      oss << "Updated weights from server:" << "\n";
+      oss << w[0].slice(0, 0, std::min<size_t>(w[0].numel(), 10)) << " ";
+      oss << "...\n";
+      Logger::instance().log(oss.str());
     }
-    Logger::instance().log("\n");
 
-    //clear local memory
-    std::memset(castV(reg_info.addr_locs.front()), 0, w.size() * sizeof(int));
+    // Set the flag to indicate that the weights are ready for the clients to read
+    srvr_ready_flag = round;
 
-    // Training step
-    Logger::instance().log("  FLTrust returned: ");
-    w[1] = runMNISTTrain();
-    for(const auto& i : w) {
-      Logger::instance().log(std::to_string(i) + " ");
-    }
-    Logger::instance().log("\n");
+    // Run local training
+    std::vector<torch::Tensor> g = runMNISTTrainDummy(w);
 
-    std::this_thread::sleep_for(std::chrono::seconds(1)); // TODO: proper synchronization
-
-    // update weights
-    std::array<int, 3> msg;
-    std::memcpy(msg.data(), castV(reg_info.addr_locs.front()), w.size() * sizeof(int));
-    Logger::instance().log("  Received msg: ");
-
-    for(const auto& i : msg) {
-      Logger::instance().log(std::to_string(i) + " ");
-    }
-    Logger::instance().log("\n");
-
-    // HERE I WOULD AGREGGATE THE WEIGHTS
-    for(int i = 0; i < w.size(); i++) {
-      w[i] += msg[2];
+    // Read the gradients from the clients
+    int clnt_idx = 0;
+    while (clnt_idx != n_clients) {
+      if(clnt_ready_flags[clnt_idx] == round) {
+        auto g_flat = torch::cat(g).contiguous();
+        size_t total_bytes_g = g_flat.numel() * sizeof(float);
+        std::memcpy(clnt_ws[clnt_idx], g_flat.data_ptr<float>(), total_bytes_g);
+        clnt_idx++;
+      }
     }
 
-    Logger::instance().log("  Updated weights: ");
-    for(const auto& i : w) {
-      Logger::instance().log(std::to_string(i) + " ");
-
+    {
+      std::ostringstream oss;
+      oss << "Server read gradients from clients:" << "\n";
+      for (int i = 0; i < n_clients; i++) {
+        oss << "Client " << i << ":\n";
+        oss << torch::from_blob(clnt_ws[i], { static_cast<long>(REG_SZ_DATA / sizeof(float)) }, torch::kFloat32).slice(0, 0, std::min<size_t>(REG_SZ_DATA / sizeof(float), 10)) << " ";
+        oss << "...\n";
+      }
+      Logger::instance().log(oss.str());
     }
-    Logger::instance().log("\n");
-
-
-    std::this_thread::sleep_for(std::chrono::seconds(1));
 
   }
+
+  // free memory
+  free(srvr_w);
+  for (int i = 0; i < n_clients; i++) {
+    free(clnt_ws[i]);
+  }
+  free(addr_info.ipv4_addr);
+  free(addr_info.port);
 
   std::cout << "Server done\n";
 
