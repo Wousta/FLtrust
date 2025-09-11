@@ -123,7 +123,7 @@ Common issues and fixes:
 
 ## License
 
-No license file is included at this time. All rights reserved by the author. Contact the author to discuss licensing.
+This project is licensed under the MIT License. See the `LICENSE` file for details.
 
 ## Acknowledgments
 
